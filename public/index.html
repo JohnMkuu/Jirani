@@ -23,6 +23,25 @@
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script>if (typeof io === 'undefined') document.write('<script src="/socket.io/socket.io.js"><\/script>');</script>
 
+  <!-- Firebase SDK (compat — works in plain HTML without bundler) -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script>
+    // ── Firebase Initialisation ───────────────────────────────────────────────
+    const _firebaseConfig = {
+      apiKey:            "AIzaSyAT3CgpTJo_s3hpDNSUepfN4AG0JEBBOjw",
+      authDomain:        "jirani-b1aee.firebaseapp.com",
+      projectId:         "jirani-b1aee",
+      storageBucket:     "jirani-b1aee.firebasestorage.app",
+      messagingSenderId: "206230940635",
+      appId:             "1:206230940635:web:ed073712ad6e7ba06495fe",
+      measurementId:     "G-BP9948WPHD"
+    };
+    if (!firebase.apps.length) firebase.initializeApp(_firebaseConfig);
+    const _fbAuth = firebase.auth();
+    _fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  </script>
+
   <style>
     /* ==========================================================================
        PPHUB / JIRANI SLEEK DARK AESTHETICS (Black, Amber/Gold, Crimson Rose)
@@ -3429,6 +3448,115 @@
       font-size: 0.85rem;
       cursor: pointer;
     }
+
+    /* ── Gender Selection Modal (post-Google-login step) ── */
+    .gender-select-modal {
+      position: fixed; inset: 0; z-index: 10100;
+      background: rgba(0,0,0,0.88);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .gender-select-box {
+      background: #0f1218;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 2rem 1.75rem;
+      max-width: 420px; width: 100%;
+      text-align: center;
+      animation: fadeSlideUp 0.3s ease;
+    }
+    .gender-select-title {
+      font-size: 1.45rem; font-weight: 900;
+      color: #fff; margin-bottom: 0.3rem;
+    }
+    .gender-select-subtitle {
+      font-size: 0.84rem; color: var(--text-secondary);
+      margin-bottom: 1.75rem;
+    }
+    .gender-cards-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 0.9rem; margin-bottom: 1.5rem;
+    }
+    .gender-pick-card {
+      border: 2px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 1.4rem 0.85rem;
+      cursor: pointer;
+      background: rgba(255,255,255,0.03);
+      transition: var(--transition-smooth);
+      position: relative;
+    }
+    .gender-pick-card:hover {
+      border-color: rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.07);
+    }
+    .gender-pick-card.pick-male.active {
+      border-color: var(--pp-rose);
+      background: rgba(225,29,72,0.12);
+      box-shadow: 0 0 18px rgba(225,29,72,0.2);
+    }
+    .gender-pick-card.pick-female.active {
+      border-color: var(--pp-green);
+      background: rgba(16,185,129,0.12);
+      box-shadow: 0 0 18px rgba(16,185,129,0.2);
+    }
+    .gender-pick-emoji { font-size: 3rem; margin-bottom: 0.5rem; }
+    .gender-pick-label {
+      font-size: 1rem; font-weight: 800; color: #fff;
+      margin-bottom: 0.3rem;
+    }
+    .gender-pick-desc {
+      font-size: 0.72rem; color: var(--text-secondary); line-height: 1.4;
+    }
+    .gender-pick-check {
+      position: absolute; top: 0.6rem; right: 0.6rem;
+      width: 20px; height: 20px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 900; opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .pick-male.active .gender-pick-check {
+      background: var(--pp-rose); color: #fff; opacity: 1;
+    }
+    .pick-female.active .gender-pick-check {
+      background: var(--pp-green); color: #fff; opacity: 1;
+    }
+    .btn-gender-continue {
+      width: 100%; padding: 0.85rem;
+      border-radius: var(--radius-full);
+      border: none; cursor: pointer;
+      font-size: 0.95rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--pp-rose), #f97316);
+      color: #fff;
+      transition: var(--transition-smooth);
+      opacity: 0.4; pointer-events: none;
+    }
+    .btn-gender-continue.enabled {
+      opacity: 1; pointer-events: all;
+    }
+    .btn-gender-continue.enabled:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 22px rgba(225,29,72,0.4);
+    }
+    /* Firebase Google loading spinner overlay */
+    .firebase-loading-overlay {
+      position: fixed; inset: 0; z-index: 10200;
+      background: rgba(0,0,0,0.85);
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 1rem;
+    }
+    .firebase-loading-overlay.active { display: flex; }
+    .firebase-spinner {
+      width: 48px; height: 48px;
+      border: 3px solid rgba(255,255,255,0.15);
+      border-top-color: #4285F4;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .firebase-loading-text {
+      color: var(--text-secondary); font-size: 0.88rem; font-weight: 600;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -4696,6 +4824,13 @@
     }
 
     function handleLogout() {
+      // Sign out from Firebase
+      if (typeof _fbAuth !== 'undefined') {
+        _fbAuth.signOut().catch(() => {});
+      }
+      _firebaseIdToken = null;
+      _firebaseUser    = null;
+
       // Stop any active call
       if (state.agora.client) leaveAgora();
       if (state.match.timerInterval) clearInterval(state.match.timerInterval);
@@ -4706,6 +4841,7 @@
       localStorage.removeItem('jirani_gender');
       localStorage.removeItem('jirani_avatar');
       localStorage.removeItem('jirani_has_custom_avatar');
+      localStorage.removeItem('jirani_verified_female');
 
       // Reset state
       state.user.id = `user_${Math.random().toString(36).substr(2, 8)}`;
@@ -4777,41 +4913,126 @@
       }
     }
 
-    // Google Picker Handlers
-    function openGooglePickerModal() {
-      const modal = document.getElementById('modalGooglePicker');
-      if (modal) modal.style.display = 'flex';
+    // ── Firebase Google Sign-In (Real OAuth) ─────────────────────────────────
+    // Holds the Firebase ID token after successful Google sign-in
+    let _firebaseIdToken = null;
+    let _firebaseUser    = null;
+
+    async function signInWithFirebaseGoogle() {
+      const overlay = document.getElementById('firebaseLoadingOverlay');
+      if (overlay) overlay.classList.add('active');
+      try {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        const result  = await _fbAuth.signInWithPopup(provider);
+        _firebaseUser = result.user;
+        _firebaseIdToken = await _firebaseUser.getIdToken(/* forceRefresh= */ true);
+
+        // Close login modal immediately
+        closeLoginModal();
+
+        const storedGender = localStorage.getItem('jirani_gender');
+        if (storedGender && (storedGender === 'male' || storedGender === 'female')) {
+          // Returning user — gender already chosen, go straight to app
+          _onboardGender = storedGender;
+          if (overlay) overlay.classList.remove('active');
+          await finalizeAccountCreation({
+            provider: 'google',
+            idToken:  _firebaseIdToken,
+            email:    _firebaseUser.email,
+            name:     _firebaseUser.displayName || _firebaseUser.email.split('@')[0],
+            gender:   storedGender,
+            photoURL: _firebaseUser.photoURL || '',
+            isVerifiedFemale: storedGender === 'female' && !!localStorage.getItem('jirani_verified_female')
+          });
+        } else {
+          // New user — must choose gender first
+          if (overlay) overlay.classList.remove('active');
+          openGenderSelectModal();
+        }
+      } catch (err) {
+        if (overlay) overlay.classList.remove('active');
+        if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+          return; // user dismissed — do nothing
+        }
+        console.error('[Firebase Auth Error]', err);
+        alert('Google Sign-In failed: ' + (err.message || 'Unknown error. Please try again.'));
+      }
     }
 
-    function closeGooglePickerModal() {
-      const modal = document.getElementById('modalGooglePicker');
+    // Kept for legacy compatibility (no-op now — real sign-in uses signInWithFirebaseGoogle)
+    function openGooglePickerModal()   { signInWithFirebaseGoogle(); }
+    function closeGooglePickerModal()  { /* no-op */ }
+
+    // ── Gender Selection Modal (shown once after first Google sign-in) ────────
+    let _pendingGenderContinue = null; // 'male' | 'female'
+
+    function openGenderSelectModal() {
+      const modal = document.getElementById('modalGenderSelect');
+      if (modal) modal.style.display = 'flex';
+      // Reset state
+      _pendingGenderContinue = null;
+      ['genderPickMale','genderPickFemale'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('active');
+      });
+      const btn = document.getElementById('btnGenderContinue');
+      if (btn) btn.classList.remove('enabled');
+    }
+
+    function closeGenderSelectModal() {
+      const modal = document.getElementById('modalGenderSelect');
       if (modal) modal.style.display = 'none';
     }
 
-    function closeGooglePickerOnBackdrop(e) {
-      if (e && e.target && e.target.id === 'modalGooglePicker') {
-        closeGooglePickerModal();
-      }
+    function pickGender(gender) {
+      _pendingGenderContinue = gender;
+      _onboardGender = gender;
+      const maleCard   = document.getElementById('genderPickMale');
+      const femaleCard = document.getElementById('genderPickFemale');
+      if (maleCard)   maleCard.classList.toggle('active',   gender === 'male');
+      if (femaleCard) femaleCard.classList.toggle('active', gender === 'female');
+      const btn = document.getElementById('btnGenderContinue');
+      if (btn) btn.classList.add('enabled');
+      // Show biometric note for women
+      const note = document.getElementById('genderFemaleNote');
+      if (note) note.style.display = gender === 'female' ? 'block' : 'none';
     }
 
-    async function selectGoogleAccount(email, name) {
-      closeGooglePickerModal();
-      await completeOnboarding('google', { email, name });
-    }
+    async function confirmGenderAndContinue() {
+      if (!_pendingGenderContinue) return;
+      closeGenderSelectModal();
 
-    async function submitCustomGoogleAccount() {
-      const input = document.getElementById('customGoogleEmail');
-      const email = input ? input.value.trim() : '';
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        alert('Please enter a valid Google email address (e.g. name@gmail.com).');
-        return;
+      const name  = _firebaseUser ? (_firebaseUser.displayName || _firebaseUser.email.split('@')[0]) : 'Jirani User';
+      const email = _firebaseUser ? _firebaseUser.email : '';
+
+      if (_pendingGenderContinue === 'female') {
+        // Women must pass biometric verification first
+        _pendingFemaleRegistration = {
+          provider: 'google',
+          idToken:  _firebaseIdToken,
+          email,
+          name,
+          gender:   'female',
+          photoURL: _firebaseUser ? (_firebaseUser.photoURL || '') : ''
+        };
+        openFacialVerificationModal();
+      } else {
+        await finalizeAccountCreation({
+          provider: 'google',
+          idToken:  _firebaseIdToken,
+          email,
+          name,
+          gender:   'male',
+          photoURL: _firebaseUser ? (_firebaseUser.photoURL || '') : '',
+          isVerifiedFemale: false
+        });
       }
-      closeGooglePickerModal();
-      const derivedName = email.split('@')[0].replace(/[._]/g, ' ');
-      await completeOnboarding('google', { email, name: derivedName });
     }
 
     // Main Onboarding & Authentication Submission
+    // NOTE: With Firebase, this is only called for legacy/fallback paths.
+    // The primary flow is: signInWithFirebaseGoogle → pickGender → confirmGenderAndContinue → finalizeAccountCreation
     async function completeOnboarding(provider = 'email', customData = null) {
       // Check Terms checkbox
       const termsCheck = document.getElementById('authTermsAgree');
@@ -4824,115 +5045,84 @@
         selectOnboardGender('male');
       }
 
-      let email = '';
-      let password = '';
-      let name = '';
+      let email = '', password = '', name = '';
 
       if (provider === 'google' && customData) {
         email = customData.email || '';
-        name = customData.name || '';
+        name  = customData.name  || '';
       } else {
-        const emailInput = document.getElementById('onboardEmail');
-        const pwdInput = document.getElementById('onboardPassword');
-        const nameInput = document.getElementById('onboardName');
-
-        email = emailInput ? emailInput.value.trim() : '';
-        password = pwdInput ? pwdInput.value : '';
-        name = nameInput ? nameInput.value.trim() : '';
-
-        // Email validation
-        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-          alert('A valid email address is required (e.g. yourname@example.com). Instant or guest access is disabled.');
-          if (emailInput) emailInput.focus();
-          return;
-        }
-
-        // Password validation
-        if (!password || password.length < 6) {
-          alert('Password must be at least 6 characters long.');
-          if (pwdInput) pwdInput.focus();
-          return;
-        }
-
-        if (!name || name.length < 2) {
-          name = email.split('@')[0].replace(/[._]/g, ' ');
-        }
+        // No email form shown any more — this path is not reachable via UI
+        alert('Please use "Continue with Google" to sign in.');
+        return;
       }
 
-      // STRICT FACIAL VERIFICATION FOR WOMEN:
-      // If user is registering as female, they MUST pass biometric facial scan before their account is created!
       if (_onboardGender === 'female') {
-        _pendingFemaleRegistration = {
-          provider,
-          email,
-          password,
-          name,
-          gender: 'female'
-        };
+        _pendingFemaleRegistration = { provider, email, password, name, gender: 'female' };
         closeLoginModal();
         openFacialVerificationModal();
         return;
       }
 
-      // Male User Registration / Login
-      await finalizeAccountCreation({
-        provider,
-        email,
-        password,
-        name,
-        gender: 'male',
-        isVerifiedFemale: false
-      });
+      await finalizeAccountCreation({ provider, email, password, name, gender: 'male', isVerifiedFemale: false });
     }
 
-    // Finalize Account Creation on Server
+    // Finalize Account Creation on Server — sends Firebase idToken for server verification
     async function finalizeAccountCreation(userData) {
-      const { provider, email, password, name, gender, isVerifiedFemale } = userData;
+      const { provider, idToken, email, password, name, gender, isVerifiedFemale, photoURL } = userData;
 
-      const avatar = (state.user.hasCustomPhoto && state.user.avatar)
-        ? state.user.avatar
-        : generateInitialAvatar(name);
+      // Use Firebase photo if available, otherwise generate avatar
+      const avatar = photoURL
+        || ((state.user.hasCustomPhoto && state.user.avatar) ? state.user.avatar : generateInitialAvatar(name));
 
       try {
-        const authRes = await fetch('/api/auth/login', {
-          method: 'POST',
+        const body = {
+          provider,
+          displayName: name,
+          gender,
+          avatar,
+          isVerifiedFemale: !!isVerifiedFemale
+        };
+
+        // Firebase Google login — send idToken for server verification
+        if (idToken) {
+          body.idToken = idToken;
+        } else {
+          // Legacy email path (tests)
+          body.email    = email;
+          body.password = password;
+        }
+
+        const authRes  = await fetch('/api/auth/login', {
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email,
-            password,
-            provider,
-            displayName: name,
-            gender,
-            avatar
-          })
+          body:    JSON.stringify(body)
         });
 
         const authData = await authRes.json();
         if (!authRes.ok || !authData.success) {
-          if (authData.blocked) {
-            handleFraudulentAccountBlock({ reason: authData.error });
-            return;
-          }
-          alert(authData.error || 'Login failed. Please check your credentials.');
+          if (authData.blocked) { handleFraudulentAccountBlock({ reason: authData.error }); return; }
+          alert(authData.error || 'Login failed. Please try again.');
           return;
         }
 
-        // Set active user credentials
-        state.user.id = authData.user.id;
-        state.user.displayName = authData.user.displayName;
-        state.user.gender = authData.user.gender;
-        state.user.avatar = authData.user.avatar;
-        state.user.email = email;
+        // Persist credentials
+        state.user.id              = authData.user.id;
+        state.user.displayName     = authData.user.displayName;
+        state.user.gender          = authData.user.gender;
+        state.user.avatar          = authData.user.avatar;
+        state.user.email           = authData.user.email || email;
         state.user.isVerifiedFemale = !!authData.user.isVerifiedFemale;
 
-        localStorage.setItem('jirani_uid', state.user.id);
-        localStorage.setItem('jirani_name', state.user.displayName);
-        localStorage.setItem('jirani_gender', state.user.gender);
-        localStorage.setItem('jirani_avatar', state.user.avatar);
-        localStorage.setItem('jirani_email', email);
-        localStorage.setItem('jirani_onboarded', '1');
+        localStorage.setItem('jirani_uid',      state.user.id);
+        localStorage.setItem('jirani_name',     state.user.displayName);
+        localStorage.setItem('jirani_gender',   state.user.gender);
+        localStorage.setItem('jirani_avatar',   state.user.avatar);
+        localStorage.setItem('jirani_email',    state.user.email);
+        localStorage.setItem('jirani_onboarded','1');
+        if (isVerifiedFemale) localStorage.setItem('jirani_verified_female', '1');
 
         closeLoginModal();
+        closeGenderSelectModal();
         updateAuthUI(true);
         await initApp();
       } catch (err) {
@@ -7307,45 +7497,51 @@
   </div>
 
   <!-- ==========================================================
-       GOOGLE ACCOUNT CHOOSER MODAL
+       FIREBASE LOADING OVERLAY (shows while Google OAuth popup is working)
        ========================================================== -->
-  <div id="modalGooglePicker" class="modal-backdrop" style="display:none;" onclick="closeGooglePickerOnBackdrop(event)">
-    <div class="modal-box-mall" style="max-width:400px; padding:1.75rem 1.5rem; text-align:center;">
-      <div style="display:flex; justify-content:center; margin-bottom:0.75rem;">
-        <svg style="width:36px; height:36px;" viewBox="0 0 48 48">
-          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
-          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-        </svg>
-      </div>
-      <h3 style="color:#fff; font-size:1.15rem; font-weight:800; margin-bottom:0.25rem;">Sign in with Google</h3>
-      <p style="color:var(--text-secondary); font-size:0.82rem; margin-bottom:1.25rem;">Choose an account to continue to Jirani Live</p>
+  <div id="firebaseLoadingOverlay" class="firebase-loading-overlay">
+    <div class="firebase-spinner"></div>
+    <div class="firebase-loading-text">Signing in with Google…</div>
+  </div>
 
-      <div style="display:flex; flex-direction:column; gap:0.6rem; text-align:left; margin-bottom:1.2rem;">
-        <div onclick="selectGoogleAccount('kariuki.jirani@gmail.com', 'Kariuki')" style="display:flex; align-items:center; gap:0.75rem; padding:0.65rem 0.85rem; border:1px solid rgba(255,255,255,0.12); border-radius:8px; cursor:pointer; background:rgba(255,255,255,0.03);">
-          <div style="width:34px; height:34px; border-radius:50%; background:#e11d48; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800;">K</div>
-          <div>
-            <div style="color:#fff; font-size:0.88rem; font-weight:700;">Kariuki Jirani</div>
-            <div style="color:var(--text-secondary); font-size:0.75rem;">kariuki.jirani@gmail.com</div>
-          </div>
+  <!-- ==========================================================
+       GENDER SELECTION MODAL (shown once after first Google sign-in)
+       ========================================================== -->
+  <div id="modalGenderSelect" class="gender-select-modal" style="display:none;">
+    <div class="gender-select-box">
+      <div style="font-size:2.2rem; margin-bottom:0.5rem;">👋</div>
+      <div class="gender-select-title">Welcome to Jirani!</div>
+      <div class="gender-select-subtitle">Tell us who you are to personalise your experience</div>
+
+      <div class="gender-cards-row">
+        <!-- Male Card -->
+        <div id="genderPickMale" class="gender-pick-card pick-male" onclick="pickGender('male')">
+          <div class="gender-pick-check">✓</div>
+          <div class="gender-pick-emoji">👨</div>
+          <div class="gender-pick-label">I'm a Man</div>
+          <div class="gender-pick-desc">Watch &amp; connect with verified female streamers</div>
         </div>
-        <div onclick="selectGoogleAccount('wanjiku.live@gmail.com', 'Wanjiku')" style="display:flex; align-items:center; gap:0.75rem; padding:0.65rem 0.85rem; border:1px solid rgba(255,255,255,0.12); border-radius:8px; cursor:pointer; background:rgba(255,255,255,0.03);">
-          <div style="width:34px; height:34px; border-radius:50%; background:#10b981; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800;">W</div>
-          <div>
-            <div style="color:#fff; font-size:0.88rem; font-weight:700;">Amina Wanjiku</div>
-            <div style="color:var(--text-secondary); font-size:0.75rem;">wanjiku.live@gmail.com</div>
-          </div>
+        <!-- Female Card -->
+        <div id="genderPickFemale" class="gender-pick-card pick-female" onclick="pickGender('female')">
+          <div class="gender-pick-check">✓</div>
+          <div class="gender-pick-emoji">👩</div>
+          <div class="gender-pick-label">I'm a Woman</div>
+          <div class="gender-pick-desc">Go live, earn diamonds &amp; withdraw via USDT / PayPal</div>
         </div>
       </div>
 
-      <div style="text-align:left; margin-bottom:1rem;">
-        <label style="font-size:0.75rem; color:var(--text-secondary); display:block; margin-bottom:0.35rem;">Or use another Google account:</label>
-        <input type="email" id="customGoogleEmail" class="onboard-name-input" placeholder="e.g. yourname@gmail.com" style="margin-bottom:0.5rem;">
-        <button class="btn-auth-primary" style="width:100%; padding:0.6rem; font-size:0.85rem;" onclick="submitCustomGoogleAccount()">Continue with this Google Email</button>
+      <!-- Female note (shown when female is picked) -->
+      <div id="genderFemaleNote" style="display:none; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:0.7rem 0.9rem; margin-bottom:1.25rem; font-size:0.76rem; color:#6ee7b7; text-align:left;">
+        🛡️ <strong>Biometric verification required:</strong> To protect all users, women must complete a quick facial scan to confirm identity before joining as a creator.
       </div>
 
-      <button style="background:transparent; border:none; color:var(--text-secondary); font-size:0.82rem; cursor:pointer;" onclick="closeGooglePickerModal()">Cancel</button>
+      <button id="btnGenderContinue" class="btn-gender-continue" onclick="confirmGenderAndContinue()">
+        Continue →
+      </button>
+
+      <p style="margin-top:0.9rem; font-size:0.72rem; color:var(--text-muted);">
+        By continuing you agree to our <a href="#" onclick="openSafetyModal(); return false;" style="color:var(--text-secondary);">Terms of Service</a>
+      </p>
     </div>
   </div>
 
@@ -7380,15 +7576,6 @@
           <span>📷 Scan Face to Verify</span>
         </button>
 
-        <!-- Test Simulation Buttons for QA Verification -->
-        <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
-          <button style="flex:1; background:#10b981; color:#fff; border:none; padding:0.4rem; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;" onclick="simulateFaceScan('female_verified')">
-            Pass Female Verification
-          </button>
-          <button style="flex:1; background:#ef4444; color:#fff; border:none; padding:0.4rem; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;" onclick="simulateFaceScan('male_detected')">
-            Trigger Male Detection (Block)
-          </button>
-        </div>
       </div>
     </div>
   </div>

@@ -13,6 +13,41 @@ const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
 
+// ── Firebase Admin SDK (for verifying Google ID tokens) ───────────────────────
+let _adminAuth = null;
+try {
+  const admin = require('firebase-admin');
+  if (!admin.apps.length) {
+    // If GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT is set,
+    // use it; otherwise init with projectId only (sufficient for verifyIdToken).
+    const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (serviceAccountJson) {
+      const serviceAccount = JSON.parse(serviceAccountJson);
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    } else {
+      admin.initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || 'jirani-b1aee' });
+    }
+  }
+  _adminAuth = admin.auth();
+  console.log('[Firebase Admin] Initialised — ID token verification active.');
+} catch (e) {
+  console.warn('[Firebase Admin] Not available, falling back to legacy auth:', e.message);
+}
+
+/**
+ * Verify a Firebase ID token and return the decoded claims.
+ * Returns null if verification fails.
+ */
+async function verifyFirebaseToken(idToken) {
+  if (!_adminAuth || !idToken) return null;
+  try {
+    return await _adminAuth.verifyIdToken(idToken, /* checkRevoked= */ true);
+  } catch (err) {
+    console.warn('[Firebase verifyIdToken]', err.code || err.message);
+    return null;
+  }
+}
+
 // Initialize Express & HTTP Server
 const app = express();
 const server = http.createServer(app);
@@ -1681,26 +1716,58 @@ app.get('/api/profile/:userId', (req, res) => {
 });
 
 // 2. User Authentication (Email & Google Auth - No Instant/Guest Access)
-app.post('/api/auth/login', (req, res) => {
-  const { email, password, provider, displayName, gender, avatar, googleId, userId: requestedUserId } = req.body;
+app.post('/api/auth/login', async (req, res) => {
+  const {
+    idToken,          // Firebase ID token (Google Sign-In)
+    email,            // Legacy / test path
+    password,         // Legacy / test path
+    provider,
+    displayName,
+    gender,
+    avatar,
+    isVerifiedFemale,
+    userId: requestedUserId
+  } = req.body;
 
-  if (provider === 'google') {
-    if (!email) return res.status(400).json({ error: 'Google email is required' });
+  let verifiedEmail    = '';
+  let verifiedName     = '';
+  let verifiedPhotoURL = '';
+  let verifiedUid      = '';
+  let authProvider     = provider || 'email';
+
+  // ── Firebase Google path ───────────────────────────────────────────────────
+  if (idToken) {
+    const decoded = await verifyFirebaseToken(idToken);
+    if (!decoded) {
+      return res.status(401).json({
+        success: false,
+        error:   'Invalid or expired Google token. Please sign in again.'
+      });
+    }
+    verifiedEmail    = (decoded.email || '').toLowerCase().trim();
+    verifiedName     = displayName || decoded.name || decoded.email.split('@')[0];
+    verifiedPhotoURL = decoded.picture || '';
+    verifiedUid      = `fb_${decoded.uid}`;   // Firebase UID as stable user key
+    authProvider     = 'google';
+
+  // ── Legacy email path (tests + fallback) ──────────────────────────────────
   } else {
-    // Standard Email Login & Registration
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'A valid email address is required (e.g. name@example.com)' });
+      return res.status(400).json({ error: 'A valid email address is required.' });
     }
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (provider !== 'google' && (!password || password.length < 6)) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
     }
+    verifiedEmail = email.toLowerCase().trim();
+    verifiedName  = displayName || verifiedEmail.split('@')[0].replace(/[._]/g, ' ');
   }
 
-  const cleanEmail = email.toLowerCase().trim();
-
   // Check if requested userId is already banned (Anti-Fraud)
-  if (requestedUserId && (db.bannedUsers.has(requestedUserId) || (db.users.get(requestedUserId) && db.users.get(requestedUserId).isBanned))) {
-    const banRecord = db.bannedUsers.get(requestedUserId) || db.users.get(requestedUserId);
+  const cleanEmail = verifiedEmail || (email || '').toLowerCase().trim();
+  const effectiveRequestedId = requestedUserId || verifiedUid || null;
+
+  if (effectiveRequestedId && (db.bannedUsers.has(effectiveRequestedId) || (db.users.get(effectiveRequestedId) && db.users.get(effectiveRequestedId).isBanned))) {
+    const banRecord = db.bannedUsers.get(effectiveRequestedId) || db.users.get(effectiveRequestedId);
     return res.status(403).json({
       success: false,
       blocked: true,
@@ -1709,7 +1776,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   // Check if email is on the permanent ban list (Anti-Fraud)
-  for (const [bannedId, record] of db.bannedUsers.entries()) {
+  for (const [, record] of db.bannedUsers.entries()) {
     if (record.email && record.email.toLowerCase() === cleanEmail) {
       return res.status(403).json({
         success: false,
@@ -1719,26 +1786,34 @@ app.post('/api/auth/login', (req, res) => {
     }
   }
 
-  // Find existing user by email or generate deterministic ID
+  // Find existing user by email or Firebase UID
   let existingUser = null;
-  for (const u of db.users.values()) {
-    if (u.email && u.email.toLowerCase() === cleanEmail) {
-      existingUser = u;
-      break;
+  if (verifiedUid && db.users.has(verifiedUid)) {
+    existingUser = db.users.get(verifiedUid);
+  }
+  if (!existingUser && cleanEmail) {
+    for (const u of db.users.values()) {
+      if (u.email && u.email.toLowerCase() === cleanEmail) {
+        existingUser = u;
+        break;
+      }
     }
   }
 
-  const userId = requestedUserId || (existingUser ? existingUser.id : `usr_${Buffer.from(cleanEmail).toString('hex').slice(0, 10)}`);
-  const defaultName = cleanEmail.split('@')[0].replace(/[._]/g, ' ');
-  const resolvedName = displayName || (existingUser ? existingUser.displayName : defaultName);
-  
+  const userId = effectiveRequestedId
+    || (existingUser ? existingUser.id : `usr_${Buffer.from(cleanEmail || uuidv4()).toString('hex').slice(0, 12)}`);
+  const resolvedName = verifiedName || displayName || (existingUser ? existingUser.displayName : (cleanEmail.split('@')[0].replace(/[._]/g, ' ')));
+  const resolvedAvatar = avatar || verifiedPhotoURL || (existingUser ? existingUser.avatar : '');
+
   const user = getOrCreateUser(userId, {
     displayName: resolvedName,
-    gender: gender || (existingUser ? existingUser.gender : 'male'),
-    avatar
+    gender:      gender || (existingUser ? existingUser.gender : 'male'),
+    avatar:      resolvedAvatar
   });
-  user.email = cleanEmail;
-  user.authProvider = provider || 'email';
+  user.email        = cleanEmail;
+  user.authProvider = authProvider;
+  if (verifiedUid) user.firebaseUid = verifiedUid;
+  if (isVerifiedFemale) user.isVerifiedFemale = true;
 
   // Check if user account was banned
   if (user.isBanned || db.bannedUsers.has(userId)) {
@@ -1754,7 +1829,7 @@ app.post('/api/auth/login', (req, res) => {
     success: true,
     user,
     walletBalance: wallet.balance,
-    message: provider === 'google' ? 'Google authentication successful' : 'Email authentication successful'
+    message: authProvider === 'google' ? 'Google authentication successful' : 'Email authentication successful'
   });
 });
 

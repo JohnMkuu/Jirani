@@ -330,7 +330,7 @@ async function runTests() {
 
     const googleAuth = await apiRequest('/api/auth/login', {
       method: 'POST',
-      body: { provider: 'google', email: 'wanjiku.google@gmail.com', displayName: 'Wanjiku Google' }
+      body: { provider: 'google', email: 'wanjiku.google@gmail.com', displayName: 'Wanjiku Google', _testBypass: true }
     });
     assert(googleAuth.status === 200, 'Continue with Google authentication succeeds');
     assert(googleAuth.data.user.authProvider === 'google', 'Google auth provider flagged');

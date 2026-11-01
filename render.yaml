@@ -12,4 +12,9 @@ services:
         value: 92bfa202f8a94e23add6ed84e72e6317
       - key: MPESA_ENVIRONMENT
         value: live
-
+      - key: FIREBASE_PROJECT_ID
+        value: jirani-b1aee
+      # Set FIREBASE_SERVICE_ACCOUNT to the full JSON string of your Firebase service account key
+      # (token verification works with project ID alone; service account only needed for custom tokens)
+      - key: FIREBASE_SERVICE_ACCOUNT
+        value: ""
