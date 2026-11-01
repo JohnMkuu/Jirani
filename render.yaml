@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: jirani-live
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AGORA_APP_ID
+        value: 92bfa202f8a94e23add6ed84e72e6317
+      - key: MPESA_ENVIRONMENT
+        value: live

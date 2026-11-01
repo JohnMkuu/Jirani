@@ -35,7 +35,8 @@ jirani-live/
 
 ### Step 1: Install Dependencies
 ```bash
-cd C:\Users\Raphael\.gemini\antigravity-ide\scratch\jirani-live
+git clone https://github.com/JohnMkuu/Jirani.git
+cd Jirani
 npm install
 ```
 
@@ -158,26 +159,32 @@ Run `npm run build:apk` to build a standalone APK for testing on physical Androi
 
 ## 7. Production Deployment Instructions
 
-For production, deploy to a Node.js persistent host supporting WebSockets and HTTPS (e.g. Render, Railway, DigitalOcean, or an AWS EC2 instance):
+Jirani supports instant multi-cloud deployment:
 
-1. **Environment Variables on Server:**
-   - `PORT=3000` (or host assigned `$PORT`)
-   - `NODE_ENV=production`
-   - `AGORA_APP_ID=92bfa202f8a94e23add6ed84e72e6317`
-   - `AGORA_APP_CERTIFICATE=<YOUR_AGORA_APP_CERTIFICATE>`
-   - `MPESA_ENVIRONMENT=live`
-   - `MPESA_CONSUMER_KEY=<YOUR_LIVE_DARAJA_KEY>`
-   - `MPESA_CONSUMER_SECRET=<YOUR_LIVE_DARAJA_SECRET>`
-   - `MPESA_PASSKEY=<YOUR_LIVE_DARAJA_PASSKEY>`
-   - `MPESA_SHORTCODE=<YOUR_PAYBILL_OR_TILL>`
-   - `MPESA_CALLBACK_URL=https://yourdomain.com/api/mpesa/callback`
-   - `ADMIN_SECRET=<STRONG_SECRET_KEY>`
+### Option A: Render (Recommended for Free Persistent WebSockets)
+1. Push this repository to GitHub.
+2. In Render Dashboard, click **New > Blueprint** and select your repository.
+3. Render automatically picks up `render.yaml` and provisions your service with zero configuration.
 
-2. **HTTPS Requirement:**
-   - WebRTC and `navigator.mediaDevices.getUserMedia` require a **secure context** (HTTPS or localhost).
-   - Enable SSL via Cloudflare, Let's Encrypt, or your hosting provider.
+### Option B: Railway or Fly.io (Docker)
+1. Link your GitHub repository in Railway or Fly.
+2. The included `Dockerfile` and `Procfile` build and run the production container automatically.
 
-3. **Start Command:**
-   ```bash
-   node server.js
-   ```
+### Option C: Vercel (Frontend & Serverless APIs)
+1. Deploy directly to Vercel via the Vercel GitHub integration or CLI.
+2. The included `vercel.json` and `api/index.js` serve the responsive web app from Vercel Edge CDN and route all `/api/*` endpoints to serverless functions.
+3. For matchmaking on Vercel, specify your persistent WebSocket backend URL or leave blank to connect to the active host.
+
+### Environment Variables
+Configure these in your hosting provider's dashboard:
+- `PORT=3000` (or dynamically assigned `$PORT`)
+- `NODE_ENV=production`
+- `AGORA_APP_ID=92bfa202f8a94e23add6ed84e72e6317`
+- `AGORA_APP_CERTIFICATE=<YOUR_AGORA_APP_CERTIFICATE>`
+- `MPESA_ENVIRONMENT=live`
+- `MPESA_CONSUMER_KEY=<YOUR_LIVE_DARAJA_KEY>`
+- `MPESA_CONSUMER_SECRET=<YOUR_LIVE_DARAJA_SECRET>`
+- `MPESA_PASSKEY=<YOUR_LIVE_DARAJA_PASSKEY>`
+- `MPESA_SHORTCODE=<YOUR_PAYBILL_OR_TILL>`
+- `MPESA_CALLBACK_URL=https://yourdomain.com/api/mpesa/callback`
+- `ADMIN_SECRET=<STRONG_SECRET_KEY>`

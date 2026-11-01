@@ -19,8 +19,9 @@
 
   <!-- Agora Web SDK 4.x Official CDN -->
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.22.0.js"></script>
-  <!-- Socket.IO Client -->
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Socket.IO Client (CDN with local fallback) -->
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script>if (typeof io === 'undefined') document.write('<script src="/socket.io/socket.io.js"><\/script>');</script>
 
   <style>
     /* ==========================================================================
@@ -4517,7 +4518,12 @@
 
     localStorage.setItem('jirani_uid', state.user.id);
 
-    const socket = io();
+    const backendUrl = window.JIRANI_BACKEND_URL || localStorage.getItem('jirani_backend_url') || undefined;
+    const socket = (typeof io !== 'undefined') ? (backendUrl ? io(backendUrl, { reconnectionAttempts: 5, timeout: 8000 }) : io({ reconnectionAttempts: 5, timeout: 8000 })) : { on: () => {}, emit: () => {} };
+
+    socket.on('connect_error', (err) => {
+      console.warn('[Socket Notice] Live socket connection:', err.message);
+    });
 
     // Re-register user automatically upon socket connection or reconnection
     socket.on('connect', () => {
