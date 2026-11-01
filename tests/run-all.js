@@ -305,6 +305,62 @@ async function runTests() {
     assert(authorizedAdmin.status === 200, 'Admin metrics succeeds with secret key');
     assert(typeof authorizedAdmin.data.metrics.registeredUsers === 'number', 'Platform metrics computed accurately');
 
+    // -------------------------------------------------------------
+    // Test 11: Email & Google Authentication (No Instant/Guest Access)
+    // -------------------------------------------------------------
+    console.log('\n--- Test Suite 11: Email & Google Authentication ---');
+    const invalidEmailAuth = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'notanemail', password: '123' }
+    });
+    assert(invalidEmailAuth.status === 400, 'Rejects invalid email format');
+
+    const shortPwdAuth = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'user@example.com', password: '123' }
+    });
+    assert(shortPwdAuth.status === 400, 'Rejects password shorter than 6 characters');
+
+    const validEmailAuth = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'sarah.creator@example.com', password: 'securePass2026', displayName: 'Sarah' }
+    });
+    assert(validEmailAuth.status === 200, 'Valid email authentication succeeds');
+    assert(validEmailAuth.data.user.email === 'sarah.creator@example.com', 'User email persisted');
+
+    const googleAuth = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: { provider: 'google', email: 'wanjiku.google@gmail.com', displayName: 'Wanjiku Google' }
+    });
+    assert(googleAuth.status === 200, 'Continue with Google authentication succeeds');
+    assert(googleAuth.data.user.authProvider === 'google', 'Google auth provider flagged');
+
+    // -------------------------------------------------------------
+    // Test 12: Strict Facial Verification & Anti-Impersonation Auto-Block
+    // -------------------------------------------------------------
+    console.log('\n--- Test Suite 12: Strict Facial Verification & Auto-Block ---');
+    const femaleVerify = await apiRequest('/api/creator/facial-verify', {
+      method: 'POST',
+      body: { userId: 'test_female_streamer', declaredGender: 'female', simulateTest: 'female_verified' }
+    });
+    assert(femaleVerify.status === 200, 'Female biometric face verification approved');
+    assert(femaleVerify.data.verified === true, 'Female verified creator flag set');
+
+    const maleImpersonator = await apiRequest('/api/creator/facial-verify', {
+      method: 'POST',
+      body: { userId: 'male_impersonator_1', declaredGender: 'female', simulateTest: 'male_detected' }
+    });
+    assert(maleImpersonator.status === 403, 'Male pretending to be woman rejected with HTTP 403');
+    assert(maleImpersonator.data.maleDetected === true, 'Male biometrics flagged');
+    assert(maleImpersonator.data.blocked === true, 'Fraudulent account permanently blocked');
+
+    // Verify blocked account is rejected on subsequent login
+    const blockedLogin = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'male.impersonator@example.com', password: 'password123', userId: 'male_impersonator_1' }
+    });
+    assert(blockedLogin.status === 403, 'Blocked impersonator account locked out from login');
+
   } catch (err) {
     console.error('Fatal test error:', err);
     failedTests++;

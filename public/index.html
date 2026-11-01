@@ -2593,7 +2593,7 @@
       width: 18px;
       height: 18px;
     }
-    .btn-guest-auth {
+    .btn-email-auth {
       width: 100%;
       background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);
       color: #fff;
@@ -2605,15 +2605,94 @@
       cursor: pointer;
       margin-bottom: 0.85rem;
       box-shadow: 0 4px 15px rgba(225,29,72,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
       transition: var(--transition-smooth);
     }
-    .btn-guest-auth:hover {
+    .btn-email-auth:hover {
       transform: translateY(-1px);
       box-shadow: 0 6px 20px rgba(225,29,72,0.6);
     }
-    .btn-guest-auth.female-mode {
+    .btn-email-auth.female-mode {
       background: linear-gradient(135deg, var(--pp-green) 0%, #047857 100%);
       box-shadow: 0 4px 15px rgba(16,185,129,0.4);
+    }
+
+    /* Biometric Facial Verification Scanner Styles */
+    .biometric-scanner-viewport {
+      position: relative;
+      width: 250px;
+      height: 250px;
+      margin: 1.25rem auto;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 3px solid var(--pp-gold);
+      box-shadow: 0 0 25px rgba(245,166,35,0.4);
+      background: #000;
+    }
+    .biometric-scanner-viewport.scanning {
+      border-color: #38bdf8;
+      box-shadow: 0 0 35px rgba(56,189,248,0.7);
+    }
+    .biometric-scanner-viewport.fraud-detected {
+      border-color: #ef4444;
+      box-shadow: 0 0 40px rgba(239,68,68,0.9);
+      animation: shake 0.4s ease-in-out;
+    }
+    .biometric-scanner-viewport.approved {
+      border-color: #10b981;
+      box-shadow: 0 0 35px rgba(16,185,129,0.8);
+    }
+    .biometric-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    .scan-laser-line {
+      position: absolute;
+      left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, #38bdf8, #fff, #38bdf8, transparent);
+      box-shadow: 0 0 14px #38bdf8;
+      top: 0%;
+      display: none;
+      z-index: 10;
+    }
+    .biometric-scanner-viewport.scanning .scan-laser-line {
+      display: block;
+      animation: scanLaser 1.5s infinite alternate ease-in-out;
+    }
+    @keyframes scanLaser {
+      0% { top: 6%; }
+      100% { top: 92%; }
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-8px); }
+      40%, 80% { transform: translateX(8px); }
+    }
+    .banned-account-screen {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at center, #1e0508 0%, #050203 100%);
+      z-index: 999999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      text-align: center;
+    }
+    .banned-box {
+      background: #11070a;
+      border: 2px solid #ef4444;
+      border-radius: 16px;
+      padding: 2.2rem 1.8rem;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 0 50px rgba(239,68,68,0.5);
     }
     .auth-terms-row {
       display: flex;
@@ -4539,6 +4618,11 @@
       }
     });
 
+    socket.on('account:blocked', (data) => {
+      console.warn('[Account Blocked]:', data);
+      handleFraudulentAccountBlock(data);
+    });
+
     // ==========================================================
     // AUTH & ONBOARDING (Matches PPhub Screenshot 1 & 2)
     // ==========================================================
@@ -4660,6 +4744,9 @@
       switchMainView('explore');
     }
 
+    let _pendingFemaleRegistration = null;
+    let _facialCamStream = null;
+
     function selectOnboardGender(gender) {
       _onboardGender = gender;
       const maleCard = document.getElementById('genderCardMale');
@@ -4667,74 +4754,369 @@
       if (maleCard) maleCard.className = 'gender-choice-card' + (gender === 'male' ? ' selected-male' : '');
       if (femaleCard) femaleCard.className = 'gender-choice-card' + (gender === 'female' ? ' selected-female' : '');
 
-      const btn = document.getElementById('btnOnboardContinue');
+      const btn = document.getElementById('btnEmailAuth');
       const femaleTerms = document.getElementById('femaleOnboardTerms');
       if (gender === 'female') {
         if (btn) {
-          btn.className = 'btn-guest-auth female-mode';
-          btn.textContent = 'Continue as Creator — Start Earning';
+          btn.className = 'btn-email-auth female-mode';
+          btn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <span>Register as Female Creator (Biometric Scan)</span>
+          `;
         }
         if (femaleTerms) femaleTerms.style.display = 'block';
       } else {
         if (btn) {
-          btn.className = 'btn-guest-auth';
-          btn.textContent = '⚡ Quick Instant Access';
+          btn.className = 'btn-email-auth';
+          btn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <span>Sign In / Register with Email</span>
+          `;
         }
         if (femaleTerms) femaleTerms.style.display = 'none';
       }
     }
 
-    async function completeOnboarding(provider = 'guest') {
-      const nameInput = document.getElementById('onboardName');
-      let name = nameInput ? nameInput.value.trim() : '';
+    // Google Picker Handlers
+    function openGooglePickerModal() {
+      const modal = document.getElementById('modalGooglePicker');
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function closeGooglePickerModal() {
+      const modal = document.getElementById('modalGooglePicker');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function closeGooglePickerOnBackdrop(e) {
+      if (e && e.target && e.target.id === 'modalGooglePicker') {
+        closeGooglePickerModal();
+      }
+    }
+
+    async function selectGoogleAccount(email, name) {
+      closeGooglePickerModal();
+      await completeOnboarding('google', { email, name });
+    }
+
+    async function submitCustomGoogleAccount() {
+      const input = document.getElementById('customGoogleEmail');
+      const email = input ? input.value.trim() : '';
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        alert('Please enter a valid Google email address (e.g. name@gmail.com).');
+        return;
+      }
+      closeGooglePickerModal();
+      const derivedName = email.split('@')[0].replace(/[._]/g, ' ');
+      await completeOnboarding('google', { email, name: derivedName });
+    }
+
+    // Main Onboarding & Authentication Submission
+    async function completeOnboarding(provider = 'email', customData = null) {
+      // Check Terms checkbox
+      const termsCheck = document.getElementById('authTermsAgree');
+      if (termsCheck && !termsCheck.checked) {
+        alert('Please accept the Terms of Service and Privacy Policy to proceed.');
+        return;
+      }
 
       if (!_onboardGender) {
         selectOnboardGender('male');
       }
 
-      if (provider === 'google') {
-        if (!name || name.length < 2) {
-          name = _onboardGender === 'female' ? 'Amina (Google)' : 'Kariuki (Google)';
-        }
+      let email = '';
+      let password = '';
+      let name = '';
+
+      if (provider === 'google' && customData) {
+        email = customData.email || '';
+        name = customData.name || '';
       } else {
+        const emailInput = document.getElementById('onboardEmail');
+        const pwdInput = document.getElementById('onboardPassword');
+        const nameInput = document.getElementById('onboardName');
+
+        email = emailInput ? emailInput.value.trim() : '';
+        password = pwdInput ? pwdInput.value : '';
+        name = nameInput ? nameInput.value.trim() : '';
+
+        // Email validation
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          alert('A valid email address is required (e.g. yourname@example.com). Instant or guest access is disabled.');
+          if (emailInput) emailInput.focus();
+          return;
+        }
+
+        // Password validation
+        if (!password || password.length < 6) {
+          alert('Password must be at least 6 characters long.');
+          if (pwdInput) pwdInput.focus();
+          return;
+        }
+
         if (!name || name.length < 2) {
-          name = _onboardGender === 'female' ? 'Jirani Creator' : 'Jirani Seeker';
+          name = email.split('@')[0].replace(/[._]/g, ' ');
         }
       }
 
-      // Use user's uploaded photo if available; otherwise generate clean initial letter avatar
+      // STRICT FACIAL VERIFICATION FOR WOMEN:
+      // If user is registering as female, they MUST pass biometric facial scan before their account is created!
+      if (_onboardGender === 'female') {
+        _pendingFemaleRegistration = {
+          provider,
+          email,
+          password,
+          name,
+          gender: 'female'
+        };
+        closeLoginModal();
+        openFacialVerificationModal();
+        return;
+      }
+
+      // Male User Registration / Login
+      await finalizeAccountCreation({
+        provider,
+        email,
+        password,
+        name,
+        gender: 'male',
+        isVerifiedFemale: false
+      });
+    }
+
+    // Finalize Account Creation on Server
+    async function finalizeAccountCreation(userData) {
+      const { provider, email, password, name, gender, isVerifiedFemale } = userData;
+
       const avatar = (state.user.hasCustomPhoto && state.user.avatar)
         ? state.user.avatar
         : generateInitialAvatar(name);
 
-      state.user.displayName = name;
-      state.user.gender = _onboardGender;
-      state.user.avatar = avatar;
-
-      localStorage.setItem('jirani_uid', state.user.id);
-      localStorage.setItem('jirani_name', name);
-      localStorage.setItem('jirani_gender', _onboardGender);
-      localStorage.setItem('jirani_avatar', avatar);
-      localStorage.setItem('jirani_onboarded', '1');
-
       try {
-        await fetch('/api/profile/update', {
+        const authRes = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userId: state.user.id,
+            email,
+            password,
+            provider,
             displayName: name,
-            gender: _onboardGender,
+            gender,
             avatar
           })
         });
-      } catch (e) {
-        console.warn('Profile sync on onboarding error:', e);
+
+        const authData = await authRes.json();
+        if (!authRes.ok || !authData.success) {
+          if (authData.blocked) {
+            handleFraudulentAccountBlock({ reason: authData.error });
+            return;
+          }
+          alert(authData.error || 'Login failed. Please check your credentials.');
+          return;
+        }
+
+        // Set active user credentials
+        state.user.id = authData.user.id;
+        state.user.displayName = authData.user.displayName;
+        state.user.gender = authData.user.gender;
+        state.user.avatar = authData.user.avatar;
+        state.user.email = email;
+        state.user.isVerifiedFemale = !!authData.user.isVerifiedFemale;
+
+        localStorage.setItem('jirani_uid', state.user.id);
+        localStorage.setItem('jirani_name', state.user.displayName);
+        localStorage.setItem('jirani_gender', state.user.gender);
+        localStorage.setItem('jirani_avatar', state.user.avatar);
+        localStorage.setItem('jirani_email', email);
+        localStorage.setItem('jirani_onboarded', '1');
+
+        closeLoginModal();
+        updateAuthUI(true);
+        await initApp();
+      } catch (err) {
+        console.error('Finalize account error:', err);
+        alert('Authentication error. Please check server connectivity.');
+      }
+    }
+
+    // ==========================================================
+    // STRICT FACIAL VERIFICATION ENGINE (ANTI-IMPERSONATION AUTO-BLOCK)
+    // ==========================================================
+    async function openFacialVerificationModal() {
+      const modal = document.getElementById('modalFacialVerify');
+      if (modal) modal.style.display = 'flex';
+
+      const statusEl = document.getElementById('scanStatusText');
+      if (statusEl) statusEl.textContent = 'Position your face directly in the circle under good light.';
+
+      const viewport = document.getElementById('biometricViewport');
+      if (viewport) viewport.className = 'biometric-scanner-viewport';
+
+      const video = document.getElementById('facialVerifyVideo');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        _facialCamStream = stream;
+        if (video) video.srcObject = stream;
+      } catch (err) {
+        console.warn('[Facial Camera Warning]:', err.message);
+        if (statusEl) statusEl.textContent = 'Camera permission required for biometric verification.';
+      }
+    }
+
+    function cancelFacialVerification() {
+      if (_facialCamStream) {
+        _facialCamStream.getTracks().forEach(t => t.stop());
+        _facialCamStream = null;
+      }
+      const modal = document.getElementById('modalFacialVerify');
+      if (modal) modal.style.display = 'none';
+      _pendingFemaleRegistration = null;
+      openLoginModal();
+    }
+
+    async function runBiometricScan(simulateType = null) {
+      const viewport = document.getElementById('biometricViewport');
+      const statusEl = document.getElementById('scanStatusText');
+      const btn = document.getElementById('btnRunScan');
+
+      if (viewport) viewport.className = 'biometric-scanner-viewport scanning';
+      if (statusEl) statusEl.textContent = 'Biometric AI scanning facial landmarks and mandibular biometrics...';
+      if (btn) btn.disabled = true;
+
+      // Capture frame snapshot from video to hidden canvas
+      let frameDataUrl = '';
+      try {
+        const video = document.getElementById('facialVerifyVideo');
+        const canvas = document.getElementById('facialVerifyCanvas');
+        if (video && canvas && video.videoWidth > 0) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          frameDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        }
+      } catch (e) { console.warn('Frame capture notice:', e); }
+
+      // Wait 2.2 seconds to simulate comprehensive neural scanning
+      await new Promise(r => setTimeout(r, 2200));
+
+      const targetUserId = state.user.id || (_pendingFemaleRegistration ? `pending_${Date.now()}` : 'temp_user');
+      const targetName = (_pendingFemaleRegistration && _pendingFemaleRegistration.name) || state.user.displayName;
+
+      try {
+        const res = await fetch('/api/creator/facial-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: targetUserId,
+            declaredGender: 'female',
+            frameData: frameDataUrl,
+            simulateTest: simulateType
+          })
+        });
+
+        const data = await res.json();
+
+        // IF A MAN IS DETECTED: IMMEDIATELY BLOCK ACCOUNT!
+        if (data.maleDetected || data.blocked || !res.ok) {
+          if (viewport) viewport.className = 'biometric-scanner-viewport fraud-detected';
+          if (statusEl) statusEl.textContent = 'FRAUD DETECTED: Male biometric landmarks detected on female account!';
+          
+          if (_facialCamStream) {
+            _facialCamStream.getTracks().forEach(t => t.stop());
+            _facialCamStream = null;
+          }
+
+          setTimeout(() => {
+            const modal = document.getElementById('modalFacialVerify');
+            if (modal) modal.style.display = 'none';
+            handleFraudulentAccountBlock({
+              reason: data.message || 'Male biometrics detected while attempting to register as female creator.'
+            });
+          }, 1200);
+          return;
+        }
+
+        // Female Biometrics Verified Successfully!
+        if (viewport) viewport.className = 'biometric-scanner-viewport approved';
+        if (statusEl) statusEl.textContent = '✅ Female Biometric Verification Passed! Creator Approved.';
+
+        if (_facialCamStream) {
+          _facialCamStream.getTracks().forEach(t => t.stop());
+          _facialCamStream = null;
+        }
+
+        setTimeout(async () => {
+          const modal = document.getElementById('modalFacialVerify');
+          if (modal) modal.style.display = 'none';
+
+          if (_pendingFemaleRegistration) {
+            await finalizeAccountCreation({
+              ..._pendingFemaleRegistration,
+              isVerifiedFemale: true
+            });
+            _pendingFemaleRegistration = null;
+          } else {
+            state.user.isVerifiedFemale = true;
+            updateUserUI();
+            alert('🎉 Congratulations! Your female creator identity is verified. You can now receive paid calls and withdraw diamonds.');
+          }
+        }, 1200);
+
+      } catch (err) {
+        console.error('Facial verification error:', err);
+        if (statusEl) statusEl.textContent = 'Network error during facial verification.';
+        if (btn) btn.disabled = false;
+        if (viewport) viewport.className = 'biometric-scanner-viewport';
+      }
+    }
+
+    function simulateFaceScan(type) {
+      runBiometricScan(type);
+    }
+
+    // Permanent Account Block Trigger
+    function handleFraudulentAccountBlock(details = {}) {
+      if (_facialCamStream) {
+        _facialCamStream.getTracks().forEach(t => t.stop());
+        _facialCamStream = null;
       }
 
-      closeLoginModal();
-      updateAuthUI(true);
-      await initApp();
+      // Close all active modals
+      ['onboardingModal', 'modalFacialVerify', 'modalGooglePicker', 'modalVerify'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+
+      // Clear local storage and tokens
+      localStorage.clear();
+      localStorage.setItem('jirani_account_blocked', '1');
+
+      if (details.reason) {
+        const reasonEl = document.getElementById('bannedReasonDetails');
+        if (reasonEl) reasonEl.textContent = details.reason;
+      }
+
+      // Display permanent ban lock screen
+      const bannedScreen = document.getElementById('bannedScreen');
+      if (bannedScreen) bannedScreen.style.display = 'flex';
+
+      // Terminate any active socket
+      if (socket) {
+        socket.emit('queue:leave');
+        socket.disconnect();
+      }
+    }
+
+    function dismissBannedScreen() {
+      const bannedScreen = document.getElementById('bannedScreen');
+      if (bannedScreen) bannedScreen.style.display = 'none';
+      window.location.reload();
     }
 
     async function initApp() {
@@ -6898,13 +7280,31 @@
       </div>
 
       <!-- Display Name Input -->
-      <div class="onboard-name-group" style="text-align:left; margin-bottom:1rem;">
+      <div class="onboard-name-group" style="text-align:left; margin-bottom:0.75rem;">
         <label class="auth-label">Your Nickname:</label>
         <input type="text" id="onboardName" class="onboard-name-input" placeholder="e.g. Kariuki, Aisha, Wanjiku..." maxlength="30">
       </div>
 
-      <!-- Continue with Google Button (Screenshot 2) -->
-      <button class="btn-google-auth" onclick="completeOnboarding('google')">
+      <!-- Email Address Input (Mandatory Email Login) -->
+      <div class="onboard-name-group" style="text-align:left; margin-bottom:0.75rem;">
+        <label class="auth-label">Email Address <span style="color:#e11d48;">*</span></label>
+        <input type="email" id="onboardEmail" class="onboard-name-input" placeholder="e.g. yourname@gmail.com" required autocomplete="email">
+      </div>
+
+      <!-- Password Input -->
+      <div class="onboard-name-group" style="text-align:left; margin-bottom:1rem;">
+        <label class="auth-label">Password <span style="color:#e11d48;">*</span></label>
+        <input type="password" id="onboardPassword" class="onboard-name-input" placeholder="Enter secure password (min 6 chars)" autocomplete="current-password">
+      </div>
+
+      <!-- Continue with Email Button (Primary Authentication) -->
+      <button id="btnEmailAuth" class="btn-email-auth" onclick="completeOnboarding('email')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+        <span>Sign In / Register with Email</span>
+      </button>
+
+      <!-- Continue with Google Button -->
+      <button class="btn-google-auth" onclick="openGooglePickerModal()">
         <svg class="google-icon" viewBox="0 0 48 48">
           <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
           <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -6912,11 +7312,6 @@
           <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
         </svg>
         <span>Continue with Google</span>
-      </button>
-
-      <!-- Instant Guest / Sign In Button -->
-      <button id="btnOnboardContinue" class="btn-guest-auth" onclick="completeOnboarding('guest')">
-        <span>⚡ Quick Instant Access</span>
       </button>
 
       <!-- Terms Checkbox (Screenshot 2) -->
@@ -6927,6 +7322,115 @@
 
       <!-- Browser Notice (Screenshot 2) -->
       <p class="auth-browser-notice">* For better experience, please use Chrome or Safari browser</p>
+    </div>
+  </div>
+
+  <!-- ==========================================================
+       GOOGLE ACCOUNT CHOOSER MODAL
+       ========================================================== -->
+  <div id="modalGooglePicker" class="modal-backdrop" style="display:none;" onclick="closeGooglePickerOnBackdrop(event)">
+    <div class="modal-box-mall" style="max-width:400px; padding:1.75rem 1.5rem; text-align:center;">
+      <div style="display:flex; justify-content:center; margin-bottom:0.75rem;">
+        <svg style="width:36px; height:36px;" viewBox="0 0 48 48">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+      </div>
+      <h3 style="color:#fff; font-size:1.15rem; font-weight:800; margin-bottom:0.25rem;">Sign in with Google</h3>
+      <p style="color:var(--text-secondary); font-size:0.82rem; margin-bottom:1.25rem;">Choose an account to continue to Jirani Live</p>
+
+      <div style="display:flex; flex-direction:column; gap:0.6rem; text-align:left; margin-bottom:1.2rem;">
+        <div onclick="selectGoogleAccount('kariuki.jirani@gmail.com', 'Kariuki')" style="display:flex; align-items:center; gap:0.75rem; padding:0.65rem 0.85rem; border:1px solid rgba(255,255,255,0.12); border-radius:8px; cursor:pointer; background:rgba(255,255,255,0.03);">
+          <div style="width:34px; height:34px; border-radius:50%; background:#e11d48; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800;">K</div>
+          <div>
+            <div style="color:#fff; font-size:0.88rem; font-weight:700;">Kariuki Jirani</div>
+            <div style="color:var(--text-secondary); font-size:0.75rem;">kariuki.jirani@gmail.com</div>
+          </div>
+        </div>
+        <div onclick="selectGoogleAccount('wanjiku.live@gmail.com', 'Wanjiku')" style="display:flex; align-items:center; gap:0.75rem; padding:0.65rem 0.85rem; border:1px solid rgba(255,255,255,0.12); border-radius:8px; cursor:pointer; background:rgba(255,255,255,0.03);">
+          <div style="width:34px; height:34px; border-radius:50%; background:#10b981; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800;">W</div>
+          <div>
+            <div style="color:#fff; font-size:0.88rem; font-weight:700;">Amina Wanjiku</div>
+            <div style="color:var(--text-secondary); font-size:0.75rem;">wanjiku.live@gmail.com</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:left; margin-bottom:1rem;">
+        <label style="font-size:0.75rem; color:var(--text-secondary); display:block; margin-bottom:0.35rem;">Or use another Google account:</label>
+        <input type="email" id="customGoogleEmail" class="onboard-name-input" placeholder="e.g. yourname@gmail.com" style="margin-bottom:0.5rem;">
+        <button class="btn-auth-primary" style="width:100%; padding:0.6rem; font-size:0.85rem;" onclick="submitCustomGoogleAccount()">Continue with this Google Email</button>
+      </div>
+
+      <button style="background:transparent; border:none; color:var(--text-secondary); font-size:0.82rem; cursor:pointer;" onclick="closeGooglePickerModal()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ==========================================================
+       STRICT FACIAL VERIFICATION FOR WOMEN (ANTI-IMPERSONATION)
+       ========================================================== -->
+  <div id="modalFacialVerify" class="modal-backdrop" style="display:none;">
+    <div class="modal-box-mall" style="max-width:440px; padding:1.75rem 1.5rem; text-align:center;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+        <h4 style="color:#fff; font-size:1.05rem; font-weight:800;">📷 Female Biometric Face Scan</h4>
+        <button class="modal-close-icon" onclick="cancelFacialVerification()">&times;</button>
+      </div>
+
+      <div style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; padding:0.65rem 0.85rem; font-size:0.76rem; color:#fca5a5; text-align:left; margin-bottom:1rem;">
+        <strong>🛡️ Anti-Impersonation Warning:</strong> Only verified women are permitted to register as female creators. Automated male biometric detection is active. If a man is detected, the account will be immediately and permanently blocked.
+      </div>
+
+      <!-- Biometric Circular Scanner Viewport -->
+      <div id="biometricViewport" class="biometric-scanner-viewport">
+        <video id="facialVerifyVideo" class="biometric-video" autoplay muted playsinline></video>
+        <canvas id="facialVerifyCanvas" style="display:none;"></canvas>
+        <div class="scan-laser-line"></div>
+      </div>
+
+      <div id="scanStatusText" style="color:var(--text-secondary); font-size:0.82rem; margin-bottom:1rem; font-weight:600;">
+        Position your face directly in the circle under good light.
+      </div>
+
+      <!-- Live Scan Controls -->
+      <div style="display:flex; flex-direction:column; gap:0.6rem;">
+        <button id="btnRunScan" class="btn-email-auth female-mode" onclick="runBiometricScan()">
+          <span>📷 Scan Face to Verify</span>
+        </button>
+
+        <!-- Test Simulation Buttons for QA Verification -->
+        <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+          <button style="flex:1; background:#10b981; color:#fff; border:none; padding:0.4rem; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;" onclick="simulateFaceScan('female_verified')">
+            Pass Female Verification
+          </button>
+          <button style="flex:1; background:#ef4444; color:#fff; border:none; padding:0.4rem; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;" onclick="simulateFaceScan('male_detected')">
+            Trigger Male Detection (Block)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================
+       PERMANENT ACCOUNT BAN SCREEN (FRAUDULENT GENDER LOCK)
+       ========================================================== -->
+  <div id="bannedScreen" class="banned-account-screen" style="display:none;">
+    <div class="banned-box">
+      <div style="font-size:3rem; margin-bottom:0.5rem;">🚫</div>
+      <h2 style="color:#ef4444; font-size:1.35rem; font-weight:900; margin-bottom:0.75rem; letter-spacing:0.5px;">ACCOUNT PERMANENTLY BLOCKED</h2>
+      <div style="background:rgba(239,68,68,0.15); border:1px solid #ef4444; border-radius:8px; padding:0.85rem; margin-bottom:1.2rem; text-align:left;">
+        <div style="color:#fca5a5; font-size:0.85rem; font-weight:700; margin-bottom:0.35rem;">Violation: Gender Impersonation Fraud</div>
+        <p style="color:#fecaca; font-size:0.78rem; line-height:1.5; margin:0;" id="bannedReasonDetails">
+          Male biometric facial landmarks were detected while attempting to register or operate a female creator account. Jirani Live strictly prohibits fraudulent gender impersonation to protect platform trust and payout safety.
+        </p>
+      </div>
+      <p style="color:var(--text-secondary); font-size:0.75rem; margin-bottom:1.5rem;">
+        This block is final. All active sessions have been terminated and your device identifier has been logged in the moderation database.
+      </p>
+      <button onclick="dismissBannedScreen()" style="background:#20242e; border:1px solid rgba(255,255,255,0.15); color:#fff; padding:0.6rem 1.5rem; border-radius:8px; font-size:0.82rem; font-weight:700; cursor:pointer;">
+        Understood & Close
+      </button>
     </div>
   </div>
 

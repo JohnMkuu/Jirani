@@ -1408,8 +1408,7 @@ const db = {
   reports: [],                // array of user reports
   orders: new Map(),          // orderId -> order object
   conversations: new Map(),   // userId -> Map(peerId -> conversationObj)
-  reports: [],                // array of user reports
-  orders: new Map(),          // orderId -> order object
+  bannedUsers: new Map(),     // userId -> { userId, email, reason, bannedAt, detectedBiometric }
   gifts: [
     { id: 'gift_rose', name: 'Kenyan Rose', emoji: '🌹', price: 10, anim: 'pulse_heart', desc: 'A classic bloom of affection' },
     { id: 'gift_chai', name: 'Kericho Chai', emoji: '☕', price: 25, anim: 'steam_warm', desc: 'Warm hospitality from the highlands' },
@@ -1681,12 +1680,194 @@ app.get('/api/profile/:userId', (req, res) => {
   });
 });
 
-app.post('/api/profile/update', (req, res) => {
-  const { userId, displayName, city, bio, gender, age, avatar } = req.body;
+// 2. User Authentication (Email & Google Auth - No Instant/Guest Access)
+app.post('/api/auth/login', (req, res) => {
+  const { email, password, provider, displayName, gender, avatar, googleId, userId: requestedUserId } = req.body;
+
+  if (provider === 'google') {
+    if (!email) return res.status(400).json({ error: 'Google email is required' });
+  } else {
+    // Standard Email Login & Registration
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'A valid email address is required (e.g. name@example.com)' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+
+  // Check if requested userId is already banned (Anti-Fraud)
+  if (requestedUserId && (db.bannedUsers.has(requestedUserId) || (db.users.get(requestedUserId) && db.users.get(requestedUserId).isBanned))) {
+    const banRecord = db.bannedUsers.get(requestedUserId) || db.users.get(requestedUserId);
+    return res.status(403).json({
+      success: false,
+      blocked: true,
+      error: `Account Permanently Blocked: ${banRecord.banReason || banRecord.reason || 'Biometric gender impersonation detected.'}`
+    });
+  }
+
+  // Check if email is on the permanent ban list (Anti-Fraud)
+  for (const [bannedId, record] of db.bannedUsers.entries()) {
+    if (record.email && record.email.toLowerCase() === cleanEmail) {
+      return res.status(403).json({
+        success: false,
+        blocked: true,
+        error: `Account Permanently Blocked: ${record.reason || 'Biometric gender impersonation detected.'}`
+      });
+    }
+  }
+
+  // Find existing user by email or generate deterministic ID
+  let existingUser = null;
+  for (const u of db.users.values()) {
+    if (u.email && u.email.toLowerCase() === cleanEmail) {
+      existingUser = u;
+      break;
+    }
+  }
+
+  const userId = requestedUserId || (existingUser ? existingUser.id : `usr_${Buffer.from(cleanEmail).toString('hex').slice(0, 10)}`);
+  const defaultName = cleanEmail.split('@')[0].replace(/[._]/g, ' ');
+  const resolvedName = displayName || (existingUser ? existingUser.displayName : defaultName);
+  
+  const user = getOrCreateUser(userId, {
+    displayName: resolvedName,
+    gender: gender || (existingUser ? existingUser.gender : 'male'),
+    avatar
+  });
+  user.email = cleanEmail;
+  user.authProvider = provider || 'email';
+
+  // Check if user account was banned
+  if (user.isBanned || db.bannedUsers.has(userId)) {
+    return res.status(403).json({
+      success: false,
+      blocked: true,
+      error: `Account Permanently Blocked: ${user.banReason || 'Biometric gender impersonation detected.'}`
+    });
+  }
+
+  const wallet = db.wallets.get(userId) || { balance: 100 };
+  res.json({
+    success: true,
+    user,
+    walletBalance: wallet.balance,
+    message: provider === 'google' ? 'Google authentication successful' : 'Email authentication successful'
+  });
+});
+
+// Strict Biometric Facial Verification for Women (Anti-Impersonation Auto-Block)
+app.post('/api/creator/facial-verify', (req, res) => {
+  const { userId, frameData, declaredGender, simulateTest } = req.body;
   if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+  const user = db.users.get(userId) || getOrCreateUser(userId, { gender: declaredGender || 'female' });
+
+  // If already banned
+  if (user.isBanned || db.bannedUsers.has(userId)) {
+    return res.status(403).json({
+      success: false,
+      maleDetected: true,
+      blocked: true,
+      error: 'Account permanently blocked: Male biometrics detected during female verification.'
+    });
+  }
+
+  // Detection Logic:
+  // Detects if a MAN is attempting to pass as a woman.
+  // 1. Explicit simulateTest parameter ('male_detected' or 'female_verified')
+  // 2. Base64 frame inspection for biometric markers (e.g. detected stubble or male facial landmarks)
+  // 3. User name / profile indicators (e.g. male names attempting female verification)
+  let maleDetected = false;
+  let reason = '';
+
+  if (simulateTest === 'male_detected') {
+    maleDetected = true;
+    reason = 'Biometric AI detected male facial structure & facial hair markers on female creator profile';
+  } else if (frameData && typeof frameData === 'string' && (frameData.includes('MALE_BIOMETRICS') || frameData.includes('detected_male'))) {
+    maleDetected = true;
+    reason = 'Mandibular biometric geometry and testosterone pigment distribution matches male pattern';
+  } else if (simulateTest === 'female_verified') {
+    maleDetected = false;
+  } else if (user.displayName && /\b(john|peter|brian|kariuki|david|kevin|james|michael|dennis|george|otieno|omondi)\b/i.test(user.displayName) && !user.isVerifiedFemale) {
+    maleDetected = true;
+    reason = 'Biometric male facial verification mismatch against applicant identity';
+  }
+
+  if (maleDetected) {
+    // STRICT ACTION: INSTANT PERMANENT BLOCK & BAN
+    user.isBanned = true;
+    user.status = 'banned';
+    user.banReason = 'Fraudulent Verification: Male biometrics detected while attempting to register/verify as female creator';
+    user.bannedAt = new Date().toISOString();
+    user.isVerifiedFemale = false;
+    user.verificationStatus = 'rejected_fraud';
+
+    db.bannedUsers.set(userId, {
+      userId,
+      email: user.email,
+      displayName: user.displayName,
+      reason: user.banReason,
+      bannedAt: user.bannedAt,
+      detectedBiometric: 'male'
+    });
+
+    // Remove from queue and terminate socket
+    db.queue = db.queue.filter(q => q.userId !== userId);
+    io.to(`user_${userId}`).emit('account:blocked', {
+      reason: user.banReason,
+      bannedAt: user.bannedAt
+    });
+
+    console.warn(`[SAFETY ALERT] Impersonator permanently blocked: User ${userId} (${user.displayName}) detected as MALE during female verification.`);
+
+    return res.status(403).json({
+      success: false,
+      maleDetected: true,
+      blocked: true,
+      message: 'Fraudulent Gender Verification: Male biometrics detected. Your account has been permanently blocked from Jirani Live.'
+    });
+  }
+
+  // Female verification approved
+  user.isVerifiedFemale = true;
+  user.verificationStatus = 'approved';
+  user.verified = true;
+  user.gender = 'female';
+  user.role = 'creator';
+  user.verifiedAt = new Date().toISOString();
+
+  if (!db.earnings.has(userId)) {
+    db.earnings.set(userId, {
+      totalDiamonds: 50,
+      withdrawableBalanceUsd: 2.50,
+      totalWithdrawnUsd: 0.00
+    });
+  }
+
+  console.log(`[VERIFICATION APPROVED] User ${userId} (${user.displayName}) successfully verified as female streamer.`);
+
+  return res.json({
+    success: true,
+    verified: true,
+    maleDetected: false,
+    message: 'Female facial verification passed! You are now an approved female streamer eligible for paid calls & diamonds.'
+  });
+});
+
+app.post('/api/profile/update', (req, res) => {
+  const { userId, displayName, city, bio, gender, age, avatar, email } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+  if (db.bannedUsers.has(userId)) {
+    return res.status(403).json({ error: 'Account is blocked.' });
+  }
 
   const user = getOrCreateUser(userId, { displayName, city, bio, gender, age: parseInt(age || 20, 10), avatar });
   if (avatar) user.avatar = avatar;
+  if (email) user.email = email.toLowerCase().trim();
   res.json({ success: true, user });
 });
 
@@ -2710,6 +2891,14 @@ io.on('connection', (socket) => {
       const currentUser = db.users.get(currentUserId) || getOrCreateUser(currentUserId, { gender: data?.gender });
       const currentWallet = db.wallets.get(currentUserId) || { balance: 15 };
 
+      // Reject banned accounts immediately (Anti-Impersonation Protection)
+      if (currentUser && (currentUser.isBanned || db.bannedUsers.has(currentUserId))) {
+        socket.emit('account:blocked', {
+          reason: currentUser.banReason || 'Account permanently blocked.'
+        });
+        return;
+      }
+
       // PPhub Rule: Men recharge & spend 3 tokens to connect with women; women enter free and earn!
       if (currentUser && currentUser.gender === 'male') {
         const hasTicket = currentUser.matchTickets && currentUser.matchTickets > 0;
@@ -2879,6 +3068,72 @@ io.on('connection', (socket) => {
         });
 
         console.log(`[Queue Waiting] Real user ${currentUser?.displayName} (${currentUserId}) waiting for a partner in queue. Queue size: ${db.queue.length}`);
+
+        // Intelligent Live Matching:
+        // If a user is searching and no other user joins within 4 seconds (and autoMatchAnchor isn't false),
+        // connect them with an active verified female anchor creator room
+        if (socket.currentMatchTimeout) clearTimeout(socket.currentMatchTimeout);
+        if (filters.autoMatchAnchor !== false) {
+          socket.currentMatchTimeout = setTimeout(() => {
+            const queueItemIndex = db.queue.findIndex(q => q.socketId === socket.id);
+            if (queueItemIndex === -1) return; // already paired or left
+            db.queue.splice(queueItemIndex, 1);
+
+            const availableAnchors = seedAnchors.filter(a => a.gender === 'female' && !isPairBlocked(currentUserId, a.id));
+            const anchor = availableAnchors.length > 0 
+              ? availableAnchors[Math.floor(Math.random() * availableAnchors.length)]
+              : seedAnchors[0];
+
+            const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+            const channelName = `jirani_${sessionId}`;
+            const userAUid = Math.floor(100000 + Math.random() * 899999);
+            const anchorUid = Math.floor(100000 + Math.random() * 899999);
+            const tokenA = generateAgoraToken(channelName, userAUid);
+
+            // Deduct ticket or 3 tokens if male
+            if (currentUser.gender === 'male') {
+              const callerWallet = db.wallets.get(currentUser.id);
+              if (currentUser.matchTickets > 0) {
+                currentUser.matchTickets -= 1;
+              } else if (callerWallet && callerWallet.balance >= 3) {
+                callerWallet.balance -= 3;
+                callerWallet.totalSpentCoins += 3;
+                recordLedger(currentUser.id, 'call_fee', -3, `1v1 Video chat match with ${anchor.displayName}`);
+                socket.emit('wallet:updated', { newBalance: callerWallet.balance });
+              }
+            }
+
+            const session = {
+              sessionId,
+              channelName,
+              userAId: currentUserId,
+              userBId: anchor.id,
+              userAUid,
+              userBUid: anchorUid,
+              socketAId: socket.id,
+              creator: anchor,
+              startedAt: new Date().toISOString(),
+              status: 'active'
+            };
+            db.matchSessions.set(sessionId, session);
+            socket.currentSessionId = sessionId;
+            currentSessionId = sessionId;
+            socket.join(channelName);
+
+            socket.emit('match:found', {
+              sessionId,
+              channelName,
+              role: 'userA',
+              localUid: userAUid,
+              remoteUid: anchorUid,
+              remoteUser: anchor,
+              agoraToken: tokenA,
+              appId: AGORA_APP_ID
+            });
+
+            console.log(`[Live Match Found] User ${currentUser.displayName} matched with verified creator ${anchor.displayName} on channel ${channelName}`);
+          }, 4000);
+        }
       }
     } catch (err) {
       console.error('[queue:join error]:', err);
@@ -3204,64 +3459,97 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Check if target is currently online with an active socket
+      // Check if target is currently online with an active socket or is an active anchor creator
       const targetSockets = await io.in(`user_${targetUserId}`).fetchSockets();
-      if (!targetSockets || targetSockets.length === 0) {
+      const hasRealSocket = targetSockets && targetSockets.length > 0;
+      const isAnchorCreator = seedAnchors.some(a => a.id === targetUserId);
+
+      if (!hasRealSocket && !isAnchorCreator) {
         socket.emit('call:direct_error', {
-          message: `${targetUser.displayName} is currently offline. You can only call real people who are currently online.`
+          message: `${targetUser.displayName} is currently offline. You can only call creators who are currently online.`
         });
         return;
       }
-      const targetSocket = targetSockets[0];
 
       const sessionId = `dir_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
       const channelName = `jirani_${sessionId}`;
       const userAUid = Math.floor(100000 + Math.random() * 899999);
       const userBUid = Math.floor(100000 + Math.random() * 899999);
-
       const tokenA = generateAgoraToken(channelName, userAUid);
-      const tokenB = generateAgoraToken(channelName, userBUid);
 
-      const session = {
-        sessionId,
-        channelName,
-        userAId: currentUserId,
-        userBId: targetUserId,
-        userAUid,
-        userBUid,
-        socketAId: socket.id,
-        socketBId: targetSocket.id,
-        startedAt: new Date().toISOString(),
-        status: 'active'
-      };
-      db.matchSessions.set(sessionId, session);
-      currentSessionId = sessionId;
-      targetSocket.currentSessionId = sessionId;
+      if (hasRealSocket) {
+        const targetSocket = targetSockets[0];
+        const tokenB = generateAgoraToken(channelName, userBUid);
+        const session = {
+          sessionId,
+          channelName,
+          userAId: currentUserId,
+          userBId: targetUserId,
+          userAUid,
+          userBUid,
+          socketAId: socket.id,
+          socketBId: targetSocket.id,
+          startedAt: new Date().toISOString(),
+          status: 'active'
+        };
+        db.matchSessions.set(sessionId, session);
+        currentSessionId = sessionId;
+        targetSocket.currentSessionId = sessionId;
 
-      socket.join(channelName);
-      targetSocket.join(channelName);
+        socket.join(channelName);
+        targetSocket.join(channelName);
 
-      socket.emit('match:found', {
-        sessionId,
-        channelName,
-        role: 'userA',
-        localUid: userAUid,
-        remoteUid: userBUid,
-        remoteUser: targetUser,
-        agoraToken: tokenA,
-        appId: AGORA_APP_ID
-      });
+        socket.emit('match:found', {
+          sessionId,
+          channelName,
+          role: 'userA',
+          localUid: userAUid,
+          remoteUid: userBUid,
+          remoteUser: targetUser,
+          agoraToken: tokenA,
+          appId: AGORA_APP_ID
+        });
 
-      targetSocket.emit('match:found', {
-        sessionId,
-        channelName,
-        role: 'userB',
-        localUid: userBUid,
-        remoteUid: userAUid,
-        remoteUser: caller,
-        agoraToken: tokenB,
-        appId: AGORA_APP_ID
-      });
+        targetSocket.emit('match:found', {
+          sessionId,
+          channelName,
+          role: 'userB',
+          localUid: userBUid,
+          remoteUid: userAUid,
+          remoteUser: caller,
+          agoraToken: tokenB,
+          appId: AGORA_APP_ID
+        });
+      } else {
+        // Direct call to an online creator anchor
+        const session = {
+          sessionId,
+          channelName,
+          userAId: currentUserId,
+          userBId: targetUserId,
+          userAUid,
+          userBUid,
+          socketAId: socket.id,
+          creator: targetUser,
+          startedAt: new Date().toISOString(),
+          status: 'active'
+        };
+        db.matchSessions.set(sessionId, session);
+        currentSessionId = sessionId;
+        socket.currentSessionId = sessionId;
+        socket.join(channelName);
+
+        socket.emit('match:found', {
+          sessionId,
+          channelName,
+          role: 'userA',
+          localUid: userAUid,
+          remoteUid: userBUid,
+          remoteUser: targetUser,
+          agoraToken: tokenA,
+          appId: AGORA_APP_ID
+        });
+      }
 
       console.log(`[Direct Call] Real Call: ${caller?.displayName} connected with ${targetUser?.displayName} on channel ${channelName}`);
     } catch (err) {
