@@ -341,10 +341,37 @@ async function runTests() {
     console.log('\n--- Test Suite 12: Strict Facial Verification & Auto-Block ---');
     const femaleVerify = await apiRequest('/api/creator/facial-verify', {
       method: 'POST',
-      body: { userId: 'test_female_streamer', declaredGender: 'female', simulateTest: 'female_verified' }
+      body: {
+        userId: 'test_female_streamer',
+        declaredGender: 'female',
+        simulateTest: 'female_verified',
+        uploadedPhoto: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb',
+        liveSelfie: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
+        livenessVerified: true
+      }
     });
     assert(femaleVerify.status === 200, 'Female biometric face verification approved');
     assert(femaleVerify.data.verified === true, 'Female verified creator flag set');
+    assert(femaleVerify.data.profileLive === true, 'Verified profile marked as live');
+
+    // Verify creator appears live on Explore grid with verified badge
+    const anchorsCheck = await apiRequest('/api/anchors');
+    const foundLiveCreator = anchorsCheck.data.anchors.find(a => a.id === 'test_female_streamer');
+    assert(foundLiveCreator && foundLiveCreator.isVerifiedFemale === true, 'Approved creator is live on Explore grid with verified badge');
+
+    // Test Photo Upload vs Live Selfie Mismatch Rejection
+    const mismatchVerify = await apiRequest('/api/creator/facial-verify', {
+      method: 'POST',
+      body: {
+        userId: 'test_mismatch_user',
+        declaredGender: 'female',
+        simulateTest: 'mismatch',
+        uploadedPhoto: 'data:image/jpeg;base64,photo_person_a',
+        liveSelfie: 'data:image/jpeg;base64,photo_person_b'
+      }
+    });
+    assert(mismatchVerify.status === 400, 'Rejects when uploaded photo does not match live selfie');
+    assert(mismatchVerify.data.matchFailed === true, 'Match failed flag returned on mismatch');
 
     const maleImpersonator = await apiRequest('/api/creator/facial-verify', {
       method: 'POST',
