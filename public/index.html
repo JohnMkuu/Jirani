@@ -5279,20 +5279,33 @@
     async function finalizeAccountCreation(userData) {
       const { provider, idToken, email, password, name, gender, isVerifiedFemale, photoURL } = userData;
 
+      let freshToken = idToken;
+      let effectiveEmail = email || (_firebaseUser ? _firebaseUser.email : '') || '';
+      let effectiveName  = name  || (_firebaseUser ? (_firebaseUser.displayName || (_firebaseUser.email ? _firebaseUser.email.split('@')[0] : '')) : '');
+      if (_firebaseUser && typeof _firebaseUser.getIdToken === 'function') {
+        try {
+          freshToken = await _firebaseUser.getIdToken();
+          if (!effectiveEmail && _firebaseUser.email) effectiveEmail = _firebaseUser.email;
+          if (!effectiveName && _firebaseUser.displayName) effectiveName = _firebaseUser.displayName;
+        } catch (e) {
+          console.warn('[getIdToken refresh]:', e);
+        }
+      }
+
       // Use Firebase photo if available, otherwise generate avatar
       const avatar = photoURL
-        || ((state.user.hasCustomPhoto && state.user.avatar) ? state.user.avatar : generateInitialAvatar(name));
+        || (_firebaseUser && _firebaseUser.photoURL)
+        || ((state.user.hasCustomPhoto && state.user.avatar) ? state.user.avatar : generateInitialAvatar(effectiveName || 'User'));
 
       try {
-        const effectiveEmail = email || (_firebaseUser ? _firebaseUser.email : '') || '';
         const body = {
           provider,
           email: effectiveEmail,
-          displayName: name,
+          displayName: effectiveName || 'Jirani User',
           gender: gender || 'male',
           avatar,
           isVerifiedFemale: !!isVerifiedFemale,
-          idToken: idToken || null
+          idToken: freshToken || null
         };
         if (password) body.password = password;
 
@@ -6661,6 +6674,8 @@
       }
     }
 
+    let _restMatchPollTimer = null;
+
     async function handleStartMatchClick() {
       // If user is not logged in: prompt login/signup modal first!
       if (!localStorage.getItem('jirani_onboarded') || !state.user.displayName) {
@@ -6671,7 +6686,7 @@
       // If user is male and has < 3 tokens and 0 match tickets: open Mall immediately!
       if (state.user.gender === 'male') {
         const hasTicket = state.user.matchTickets && state.user.matchTickets > 0;
-        const hasTokens = state.wallet.balance >= 3;
+        const hasTokens = (state.wallet && state.wallet.balance >= 3);
         if (!hasTicket && !hasTokens) {
           openMallModal('mall');
           alert('You need 3 tokens to connect with a female streamer. Please recharge your wallet.');
@@ -6680,7 +6695,52 @@
       }
 
       await setStage('queue');
-      socket.emit('queue:join', { userId: state.user.id, gender: state.user.gender });
+
+      // 1. WebSocket attempt (for full-duplex environments)
+      if (typeof socket !== 'undefined' && socket && socket.connected) {
+        socket.emit('queue:join', { userId: state.user.id, gender: state.user.gender });
+      }
+
+      // 2. Hybrid REST 1v1 Matchmaking (Guarantees matching on Vercel & serverless)
+      if (_restMatchPollTimer) {
+        clearInterval(_restMatchPollTimer);
+        _restMatchPollTimer = null;
+      }
+
+      try {
+        const res = await fetch('/api/match/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: state.user.id, gender: state.user.gender })
+        });
+        const data = await res.json();
+        if (data && data.status === 'matched' && data.session) {
+          await handleMatchFound(data.session);
+          return;
+        }
+      } catch (err) {
+        console.warn('[REST Match error]:', err);
+      }
+
+      // 3. Poll for partner match (female waiting for male caller or vice versa)
+      _restMatchPollTimer = setInterval(async () => {
+        if (state.currentStage !== 'queue') {
+          clearInterval(_restMatchPollTimer);
+          _restMatchPollTimer = null;
+          return;
+        }
+        try {
+          const pollRes = await fetch(`/api/match/poll/${encodeURIComponent(state.user.id)}`);
+          const pollData = await pollRes.json();
+          if (pollData && pollData.status === 'matched' && pollData.session) {
+            clearInterval(_restMatchPollTimer);
+            _restMatchPollTimer = null;
+            await handleMatchFound(pollData.session);
+          }
+        } catch (e) {
+          // ignore transient poll error
+        }
+      }, 1500);
     }
 
     const candidateAvatars = [
@@ -6769,6 +6829,7 @@
     }
 
     async function setStage(stage) {
+      state.currentStage = stage;
       const stageIdle = document.getElementById('stageIdle');
       const stageCall = document.getElementById('stageCall');
       const queueSearchingOverlay = document.getElementById('queueSearchingOverlay');
@@ -6822,7 +6883,21 @@
     }
 
     async function cancelMatchmaking() {
-      socket.emit('queue:leave');
+      if (_restMatchPollTimer) {
+        clearInterval(_restMatchPollTimer);
+        _restMatchPollTimer = null;
+      }
+      try {
+        fetch('/api/match/leave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: state.user.id })
+        }).catch(() => {});
+      } catch (e) {}
+
+      if (typeof socket !== 'undefined' && socket) {
+        socket.emit('queue:leave');
+      }
       await leaveAgora();
       await setStage('idle');
     }
@@ -6860,8 +6935,12 @@
       alert(data.message);
     });
 
-    socket.on('match:found', async (data) => {
-      console.log('[Match Found]: Real Peer Match:', data);
+    async function handleMatchFound(data) {
+      if (_restMatchPollTimer) {
+        clearInterval(_restMatchPollTimer);
+        _restMatchPollTimer = null;
+      }
+      console.log('[Match Found]: 1v1 Heterosexual Match:', data);
       state.match = {
         sessionId: data.sessionId,
         channelName: data.channelName,
@@ -6900,7 +6979,9 @@
 
       // Join Agora WebRTC channel with real peer
       await joinAgora(data.channelName, data.localUid, data.agoraToken, data.appId || state.agora.appId);
-    });
+    }
+
+    socket.on('match:found', handleMatchFound);
 
     socket.on('match:ended', async (data) => {
       await leaveAgora();

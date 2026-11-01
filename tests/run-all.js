@@ -388,6 +388,55 @@ async function runTests() {
     });
     assert(blockedLogin.status === 403, 'Blocked impersonator account locked out from login');
 
+    // -------------------------------------------------------------
+    // Test 13: Strict Heterosexual 1v1 Matchmaking (Man <-> Woman Only)
+    // -------------------------------------------------------------
+    console.log('\n--- Test Suite 13: Strict Heterosexual 1v1 Matchmaking (Man <-> Woman Only) ---');
+    
+    // 1. Clean queue before test
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_1' } });
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_2' } });
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_woman_1' } });
+
+    // 2. Woman enters queue first
+    const womanJoin = await apiRequest('/api/match/join', {
+      method: 'POST',
+      body: { userId: 'test_woman_1', gender: 'female' }
+    });
+    assert(womanJoin.status === 200, 'Woman enters matchmaking queue successfully');
+    assert(womanJoin.data.status === 'waiting', 'Woman is waiting for a male caller');
+
+    // 3. Man enters queue -> Must match with waiting real woman!
+    const manJoin = await apiRequest('/api/match/join', {
+      method: 'POST',
+      body: { userId: 'test_man_1', gender: 'male' }
+    });
+    assert(manJoin.status === 200, 'Man joins matchmaking');
+    assert(manJoin.data.status === 'matched', 'Man is matched with waiting real woman');
+    assert(manJoin.data.session.remoteUser.id === 'test_woman_1', 'Man is paired with the real woman (not a man)');
+    assert(manJoin.data.session.remoteUser.gender === 'female', 'Strict heterosexual match: partner is female');
+
+    // 4. Woman polls and receives the match with the man!
+    const womanPoll = await apiRequest('/api/match/poll/test_woman_1');
+    assert(womanPoll.status === 200, 'Woman polls match status');
+    assert(womanPoll.data.status === 'matched', 'Woman received matched status');
+    assert(womanPoll.data.session.remoteUser.id === 'test_man_1', 'Woman is paired with the real man');
+    assert(womanPoll.data.session.remoteUser.gender === 'male', 'Strict heterosexual match: partner is male');
+
+    // 5. Cleanup sessions
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_1' } });
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_woman_1' } });
+
+    // 6. Test Two Men: A man joins when only another man is around
+    const manSolo = await apiRequest('/api/match/join', {
+      method: 'POST',
+      body: { userId: 'test_man_solo', gender: 'male' }
+    });
+    assert(manSolo.status === 200, 'Searching man joins');
+    assert(manSolo.data.status === 'matched', 'Searching man matched immediately');
+    assert(manSolo.data.session.remoteUser.gender === 'female', 'Man NEVER matched with man — paired with female anchor creator');
+    await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_solo' } });
+
   } catch (err) {
     console.error('Fatal test error:', err);
     failedTests++;

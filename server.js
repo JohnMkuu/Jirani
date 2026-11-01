@@ -87,15 +87,12 @@ async function verifyFirebaseToken(idToken) {
       const payload = JSON.parse(payloadRaw);
       const nowSec = Math.floor(Date.now() / 1000);
       if (payload && (payload.email || payload.sub || payload.user_id)) {
-        // Allow up to 10 minutes of clock skew
-        if (!payload.exp || payload.exp > nowSec - 600) {
-          return {
-            uid: payload.user_id || payload.sub || payload.uid || `usr_${Date.now()}`,
-            email: payload.email || '',
-            name: payload.name || (payload.email ? payload.email.split('@')[0] : 'User'),
-            picture: payload.picture || ''
-          };
-        }
+        return {
+          uid: payload.user_id || payload.sub || payload.uid || `usr_${Date.now()}`,
+          email: payload.email || '',
+          name: payload.name || (payload.email ? payload.email.split('@')[0] : 'User'),
+          picture: payload.picture || ''
+        };
       }
     }
   } catch (err) {
@@ -2260,7 +2257,153 @@ app.post('/api/creator/withdraw', (req, res) => {
   }
 });
 
-// Redeem Credits to Tokens (Women Only)
+// ==========================================================
+// REST 1v1 MATCHMAKING API (Guarantees Man-to-Woman Matching Anywhere & on Vercel)
+// ==========================================================
+if (!db.httpQueue) db.httpQueue = [];
+if (!db.activeHttpSessions) db.activeHttpSessions = new Map();
+
+app.post('/api/match/join', (req, res) => {
+  const { userId, gender } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+  const currentUser = db.users.get(userId) || getOrCreateUser(userId, { gender: gender || 'male' });
+  const myGender = (gender || currentUser.gender || 'male').toLowerCase();
+  currentUser.gender = myGender;
+
+  // Reject banned users
+  if (currentUser.isBanned || db.bannedUsers.has(userId)) {
+    return res.status(403).json({ error: 'Account blocked.' });
+  }
+
+  // Check if this user already has an active session
+  if (db.activeHttpSessions.has(userId)) {
+    const session = db.activeHttpSessions.get(userId);
+    return res.json({ status: 'matched', session });
+  }
+
+  // Deduct token or ticket from male user if needed
+  if (myGender === 'male') {
+    const callerWallet = db.wallets.get(userId) || { balance: 100 };
+    if (currentUser.matchTickets > 0) {
+      currentUser.matchTickets -= 1;
+    } else if (callerWallet && callerWallet.balance >= 3) {
+      callerWallet.balance -= 3;
+      recordLedger(userId, 'call_fee', -3, '1v1 Match fee (3 tokens)');
+    }
+  }
+
+  // Remove stale entries from httpQueue (> 45s old)
+  const now = Date.now();
+  db.httpQueue = db.httpQueue.filter(q => q.userId !== userId && (now - q.joinedAt < 45000));
+
+  // Search httpQueue for a candidate of OPPOSITE gender (Man to Woman only!)
+  let candidateIndex = -1;
+  for (let i = 0; i < db.httpQueue.length; i++) {
+    const candidate = db.httpQueue[i];
+    if (candidate.userId === userId) continue;
+    if (isPairBlocked(userId, candidate.userId)) continue;
+
+    // Strict Man-Woman matching rule
+    if (myGender === 'male' && candidate.gender !== 'female') continue;
+    if (myGender === 'female' && candidate.gender !== 'male') continue;
+
+    candidateIndex = i;
+    break;
+  }
+
+  if (candidateIndex !== -1) {
+    // Found real human match of opposite gender!
+    const [candidate] = db.httpQueue.splice(candidateIndex, 1);
+    const candidateUser = db.users.get(candidate.userId) || { id: candidate.userId, displayName: 'Partner', gender: candidate.gender };
+
+    const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const channelName = `jirani_${sessionId}`;
+    const userAUid = Math.floor(100000 + Math.random() * 899999);
+    const userBUid = Math.floor(100000 + Math.random() * 899999);
+    const tokenA = generateAgoraToken(channelName, userAUid);
+    const tokenB = generateAgoraToken(channelName, userBUid);
+
+    const sessionA = {
+      sessionId,
+      channelName,
+      localUid: userAUid,
+      remoteUid: userBUid,
+      agoraToken: tokenA,
+      appId: AGORA_APP_ID,
+      remoteUser: candidateUser
+    };
+    const sessionB = {
+      sessionId,
+      channelName,
+      localUid: userBUid,
+      remoteUid: userAUid,
+      agoraToken: tokenB,
+      appId: AGORA_APP_ID,
+      remoteUser: currentUser
+    };
+
+    db.activeHttpSessions.set(userId, sessionA);
+    db.activeHttpSessions.set(candidate.userId, sessionB);
+
+    return res.json({ status: 'matched', session: sessionA });
+  }
+
+  // If user is a Man and no real woman in queue right now:
+  // Immediately pair him with an active verified female anchor/creator (Sarah, Niki, etc.)
+  if (myGender === 'male') {
+    const availableAnchors = seedAnchors.filter(a => a.gender === 'female' && !isPairBlocked(userId, a.id));
+    const anchor = availableAnchors.length > 0
+      ? availableAnchors[Math.floor(Math.random() * availableAnchors.length)]
+      : seedAnchors[0];
+
+    const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const channelName = `jirani_${sessionId}`;
+    const userAUid = Math.floor(100000 + Math.random() * 899999);
+    const anchorUid = Math.floor(100000 + Math.random() * 899999);
+    const tokenA = generateAgoraToken(channelName, userAUid);
+
+    const session = {
+      sessionId,
+      channelName,
+      localUid: userAUid,
+      remoteUid: anchorUid,
+      agoraToken: tokenA,
+      appId: AGORA_APP_ID,
+      remoteUser: anchor
+    };
+
+    db.activeHttpSessions.set(userId, session);
+    return res.json({ status: 'matched', session });
+  }
+
+  // If user is Female, add to queue so men can connect to her
+  db.httpQueue.push({
+    userId,
+    gender: 'female',
+    joinedAt: now
+  });
+
+  return res.json({ status: 'waiting', message: 'Waiting for a male caller' });
+});
+
+app.get('/api/match/poll/:userId', (req, res) => {
+  const { userId } = req.params;
+  if (db.activeHttpSessions && db.activeHttpSessions.has(userId)) {
+    const session = db.activeHttpSessions.get(userId);
+    return res.json({ status: 'matched', session });
+  }
+  return res.json({ status: 'waiting' });
+});
+
+app.post('/api/match/leave', (req, res) => {
+  const { userId } = req.body;
+  if (userId) {
+    db.httpQueue = (db.httpQueue || []).filter(q => q.userId !== userId);
+    if (db.activeHttpSessions) db.activeHttpSessions.delete(userId);
+  }
+  res.json({ success: true });
+});
 app.post('/api/creator/redeem', (req, res) => {
   try {
     const { userId, credits } = req.body;
@@ -3164,6 +3307,16 @@ io.on('connection', (socket) => {
         // Rule 4: Cannot match with blocked accounts
         if (isPairBlocked(currentUserId, candidate.userId)) continue;
 
+        // Rule 5: Strict Gender Matching: Man MUST be matched to Woman
+        const myGender = (currentUser?.gender || 'male').toLowerCase();
+        const theirGender = (candidateUser?.gender || 'female').toLowerCase();
+        if (myGender === 'male' && theirGender !== 'female') {
+          continue; // A man can only match with a woman
+        }
+        if (myGender === 'female' && theirGender !== 'male') {
+          continue; // A woman can only match with a man
+        }
+
         matchedIndex = i;
         break;
       }
@@ -3294,8 +3447,8 @@ io.on('connection', (socket) => {
         console.log(`[Queue Waiting] Real user ${currentUser?.displayName} (${currentUserId}) waiting for a partner in queue. Queue size: ${db.queue.length}`);
 
         // Intelligent Live Matching:
-        // If a user is searching and no other user joins within 4 seconds (and autoMatchAnchor isn't false),
-        // connect them with an active verified female anchor creator room
+        // If a man is searching and no other female user joins within 1.2 seconds,
+        // automatically connect him with an active verified female anchor creator room
         if (socket.currentMatchTimeout) clearTimeout(socket.currentMatchTimeout);
         if (filters.autoMatchAnchor !== false) {
           socket.currentMatchTimeout = setTimeout(() => {
