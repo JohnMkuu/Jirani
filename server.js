@@ -2404,6 +2404,33 @@ app.post('/api/match/leave', (req, res) => {
   }
   res.json({ success: true });
 });
+
+// REST WebRTC Signaling (Reliable P2P Video Fallback on Vercel & WebSockets)
+if (!db.webrtcSignals) db.webrtcSignals = new Map();
+
+app.post('/api/webrtc/signal', (req, res) => {
+  const { channelName, fromUserId, type, payload } = req.body;
+  if (!channelName || !fromUserId || !type) {
+    return res.status(400).json({ error: 'Missing required signaling parameters' });
+  }
+  if (!db.webrtcSignals.has(channelName)) {
+    db.webrtcSignals.set(channelName, []);
+  }
+  const signals = db.webrtcSignals.get(channelName);
+  const now = Date.now();
+  signals.push({ fromUserId, type, payload, timestamp: now });
+  // Retain signals from last 60 seconds (max 40)
+  db.webrtcSignals.set(channelName, signals.filter(s => now - s.timestamp < 60000).slice(-40));
+  res.json({ success: true });
+});
+
+app.get('/api/webrtc/signals/:channelName/:userId', (req, res) => {
+  const { channelName, userId } = req.params;
+  const since = parseInt(req.query.since || '0', 10);
+  const signals = db.webrtcSignals.get(channelName) || [];
+  const incoming = signals.filter(s => s.fromUserId !== userId && s.timestamp > since);
+  res.json({ success: true, signals: incoming, serverTime: Date.now() });
+});
 app.post('/api/creator/redeem', (req, res) => {
   try {
     const { userId, credits } = req.body;
