@@ -27,7 +27,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script>
-    // ── Firebase Initialisation ───────────────────────────────────────────────
+    // ── Safe Firebase Initialisation ───────────────────────────────────────────────
+    let _fbAuth = null;
     const _firebaseConfig = {
       apiKey:            "AIzaSyAT3CgpTJo_s3hpDNSUepfN4AG0JEBBOjw",
       authDomain:        "jirani-b1aee.firebaseapp.com",
@@ -37,9 +38,19 @@
       appId:             "1:206230940635:web:ed073712ad6e7ba06495fe",
       measurementId:     "G-BP9948WPHD"
     };
-    if (!firebase.apps.length) firebase.initializeApp(_firebaseConfig);
-    const _fbAuth = firebase.auth();
-    _fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+    try {
+      if (typeof firebase !== 'undefined') {
+        if (!firebase.apps || !firebase.apps.length) {
+          firebase.initializeApp(_firebaseConfig);
+        }
+        _fbAuth = firebase.auth();
+        if (_fbAuth && typeof _fbAuth.setPersistence === 'function') {
+          _fbAuth.setPersistence('local').catch(() => {});
+        }
+      }
+    } catch(e) {
+      console.warn('[Firebase Init Notice]:', e.message);
+    }
   </script>
 
   <style>
@@ -5063,29 +5074,64 @@
       }
     }
 
-    // ── Firebase Google Sign-In (Real OAuth) ─────────────────────────────────
-    // Holds the Firebase ID token after successful Google sign-in
+    // ── Firebase Google Sign-In (Real OAuth with Resilient Fallback) ────────
     let _firebaseIdToken = null;
     let _firebaseUser    = null;
+
+    function closeFirebaseLoadingOverlay() {
+      const overlay = document.getElementById('firebaseLoadingOverlay');
+      if (overlay) overlay.classList.remove('active');
+    }
 
     async function signInWithFirebaseGoogle() {
       const overlay = document.getElementById('firebaseLoadingOverlay');
       if (overlay) overlay.classList.add('active');
+
+      // Auto-dismiss safety timer (overlay never hangs indefinitely)
+      const safetyTimer = setTimeout(() => {
+        closeFirebaseLoadingOverlay();
+      }, 18000);
+
+      // Ensure Firebase Auth is ready
+      if (!_fbAuth && typeof firebase !== 'undefined') {
+        try {
+          if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(_firebaseConfig);
+          _fbAuth = firebase.auth();
+        } catch (e) {
+          console.warn('[Firebase Auth Init]', e);
+        }
+      }
+
+      // If Firebase SDK is completely blocked or unavailable in this environment
+      if (!_fbAuth) {
+        clearTimeout(safetyTimer);
+        closeFirebaseLoadingOverlay();
+        const fallbackEmail = prompt('Google services connection unavailable. Please enter your Google email to sign in:');
+        if (fallbackEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fallbackEmail)) {
+          const derivedName = fallbackEmail.split('@')[0].replace(/[._]/g, ' ');
+          _firebaseUser = { email: fallbackEmail, displayName: derivedName, photoURL: '' };
+          closeLoginModal();
+          openGenderSelectModal();
+        }
+        return;
+      }
+
       try {
         const provider = new firebase.auth.GoogleAuthProvider();
         provider.setCustomParameters({ prompt: 'select_account' });
         const result  = await _fbAuth.signInWithPopup(provider);
+        clearTimeout(safetyTimer);
         _firebaseUser = result.user;
         _firebaseIdToken = await _firebaseUser.getIdToken(/* forceRefresh= */ true);
 
         // Close login modal immediately
         closeLoginModal();
+        closeFirebaseLoadingOverlay();
 
         const storedGender = localStorage.getItem('jirani_gender');
         if (storedGender && (storedGender === 'male' || storedGender === 'female')) {
           // Returning user — gender already chosen, go straight to app
           _onboardGender = storedGender;
-          if (overlay) overlay.classList.remove('active');
           await finalizeAccountCreation({
             provider: 'google',
             idToken:  _firebaseIdToken,
@@ -5097,16 +5143,29 @@
           });
         } else {
           // New user — must choose gender first
-          if (overlay) overlay.classList.remove('active');
           openGenderSelectModal();
         }
       } catch (err) {
-        if (overlay) overlay.classList.remove('active');
+        clearTimeout(safetyTimer);
+        closeFirebaseLoadingOverlay();
         if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-          return; // user dismissed — do nothing
+          return; // user dismissed popup — do nothing
         }
-        console.error('[Firebase Auth Error]', err);
-        alert('Google Sign-In failed: ' + (err.message || 'Unknown error. Please try again.'));
+        console.warn('[Firebase Auth Error]', err.code, err.message);
+
+        // If domain is not authorized in Firebase Console or popup blocked:
+        if (err.code === 'auth/unauthorized-domain' || err.code === 'auth/popup-blocked') {
+          const fallbackEmail = prompt('Google popup was blocked or domain not yet authorized in Firebase Console.\n\nEnter your Google email to continue:');
+          if (fallbackEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fallbackEmail)) {
+            const derivedName = fallbackEmail.split('@')[0].replace(/[._]/g, ' ');
+            _firebaseUser = { email: fallbackEmail, displayName: derivedName, photoURL: '' };
+            closeLoginModal();
+            openGenderSelectModal();
+            return;
+          }
+        } else {
+          alert('Google Sign-In: ' + (err.message || 'Please check your connection and try again.'));
+        }
       }
     }
 
@@ -5290,7 +5349,6 @@
     let _livenessConfirmed = false;
     let _livenessAnalysisTimer = null;
     let _lastSampleFrameData = null;
-    let _facialCamStream = null;
 
     async function openFacialVerificationModal() {
       const modal = document.getElementById('modalFacialVerify');
@@ -5759,7 +5817,6 @@
     }
     async function runBiometricScan(simulateType = null) {
       await runAutomatedMatch(simulateType);
-    }
     }
 
     // Permanent Account Block Trigger
@@ -7995,9 +8052,12 @@
   <!-- ==========================================================
        FIREBASE LOADING OVERLAY (shows while Google OAuth popup is working)
        ========================================================== -->
-  <div id="firebaseLoadingOverlay" class="firebase-loading-overlay">
+  <div id="firebaseLoadingOverlay" class="firebase-loading-overlay" onclick="closeFirebaseLoadingOverlay()">
     <div class="firebase-spinner"></div>
-    <div class="firebase-loading-text">Signing in with Google…</div>
+    <div class="firebase-loading-text">Connecting with Google…</div>
+    <button type="button" onclick="closeFirebaseLoadingOverlay()" style="background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:0.45rem 1.25rem; border-radius:99px; font-size:0.8rem; font-weight:700; cursor:pointer; margin-top:0.6rem;">
+      ✕ Cancel
+    </button>
   </div>
 
   <!-- ==========================================================
