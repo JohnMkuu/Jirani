@@ -75,41 +75,65 @@ The server will start at: **`http://localhost:3000`**
 ```bash
 npm test
 ```
-Runs the full suite of **42 automated assertions** covering:
+Runs the full suite of **71 automated assertions** covering:
 - Agora App ID integrity & token generation
 - 2-client simultaneous Socket.IO matchmaking queue pairing
 - In-call real-time messaging & gift sending with atomic wallet balance updates
 - Anti-self matching and anti-blocked account filtering
 - Safaricom M-Pesa STK push initiation & webhook callback idempotency
 - Administrator authorization and live metric tracking
+- Firebase Google ID token validation & multi-tiered auth fallbacks
+- Strict 3-step biometric verification for female creators (photo vs. live selfie comparison)
+- Photo upload mismatch rejection (`simulateTest: 'mismatch'`)
+- Male impersonation detection with immediate permanent ban
+- Strict heterosexual 1v1 matchmaking (Man <-> Woman only, zero male-to-male pairing)
+- Hybrid REST matchmaking API (`/api/match/join` & `/api/match/poll`) for serverless deployments (Vercel)
 
 ---
 
-## 3. How to Test 2 Users in Live Video Chat
+## 3. How 1v1 Heterosexual Matchmaking & Verification Works
 
-To hold a genuine two-way video conversation on your machine:
+### Gender Differentiation on Signup
+1. **Google Sign-In:** Users authenticate seamlessly via Firebase Google Auth (`jirani-b1aee`).
+2. **Gender Selection Modal:** Users specify their gender:
+   - **Man:** Immediately completes account creation, receives 6 free match tickets + 100 tokens welcome bonus, and proceeds directly to the app without verification.
+   - **Woman:** Enters the **3-Step Creator Verification Pipeline**:
+     - **Step 1:** Upload clear face portrait.
+     - **Step 2:** Live optical selfie with interactive eye-blink liveness detection.
+     - **Step 3:** Automated biometric matching. If the photo does not match the selfie, verification is rejected. If a male face is detected, the account is permanently blocked for anti-fraud safety.
+     - Once approved, profile goes live with a verified creator badge (`✓ Verified Creator`) and is listed on the live Explore streamer grid.
 
-1. **Window 1 (User A):**
-   - Open Chrome or Edge: `http://localhost:3000`
-   - Allow Camera & Microphone permissions when prompted.
-   - Click the top right **"Me"** profile button to set your name (e.g. *"Alice Nairobi"*).
-   - Click the big green button: **"Start Matching • 1v1 Video"**.
-   - The radar will animate into searching mode.
+### Strict Heterosexual 1v1 Matchmaking
+- **Rule:** A Man is **strictly paired with a Woman**, and a Woman is **strictly paired with a Man**.
+- **Men never match with men.**
+- **Hybrid Matching Architecture:** Runs via both real-time Socket.IO and REST API (`POST /api/match/join`), ensuring matchmaking works on Vercel serverless, standard servers (Render/Railway), and mobile web browsers.
+- If a man searches and no real female user is in queue that exact moment, he is seamlessly paired with an active verified female anchor streamer (e.g. Sarah, Stacy, Niki) in an Agora channel, so he is never left waiting indefinitely.
 
-2. **Window 2 (User B):**
-   - Open a **New Incognito Window** (or a different browser such as Firefox, or a phone on the same Wi-Fi network): `http://localhost:3000`
-   - Allow Camera & Microphone permissions.
-   - Click the profile button to set your name (e.g. *"Bob Mombasa"*).
-   - Click **"Start Matching • 1v1 Video"**.
+---
 
-3. **Instant 1v1 Video Connection:**
-   - The backend pairs both users immediately!
+## 4. How to Test 2 Users in Live Video Chat
+
+To hold a genuine two-way video conversation between a Man and a Woman:
+
+1. **Window 1 (User A — Female Creator):**
+   - Open: `http://localhost:3000` (or `https://jirani-delta.vercel.app`)
+   - Sign in with Google, select **Woman**, complete facial verification.
+   - Tap **"Start Matching • 1v1 Video"**.
+
+2. **Window 2 (User B — Male Caller):**
+   - Open a **New Incognito Window** (or a separate device/browser).
+   - Sign in with Google, select **Man** (goes straight to app).
+   - Tap **"Start Matching • 1v1 Video"**.
+
+3. **Instant Heterosexual 1v1 Video Connection:**
+   - The backend pairs the male caller with the verified female streamer!
    - Both users receive their Agora channel name (`jirani_ses_...`) and numeric Agora UIDs.
    - Both users see and hear each other live with full Agora RTC video!
+   - Female creator earns 3 Diamonds from the call. Male caller uses 1 ticket or 3 tokens.
    - Test in-call features:
      - 🎙️ **Mute/Unmute Mic**
      - 📹 **Camera On/Off**
-     - 🔄 **Flip Camera** (switches cameras on compatible devices)
+     - 🔄 **Flip Camera** (switches cameras on mobile devices)
      - 💬 **Live Chat** (send Swahili quick phrases like *"Niaje!"* or custom text)
      - 🎁 **Send Virtual Gifts** (send a *Kenyan Rose* or *Maasai Shield*; watch the floating animated banner appear on both screens)
      - ⏭️ **Next / Skip** (instantly ends call and finds the next match)
