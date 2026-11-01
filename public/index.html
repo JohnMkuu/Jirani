@@ -4555,16 +4555,18 @@
         if (cookieBanner) cookieBanner.style.display = 'block';
       }
 
+      // Keep login modal hidden initially - Explore discovery grid (Image 1) is the face of the app
+      closeLoginModal();
+
       if (!hasCompleted || !savedGender || !savedName) {
-        // Logged-out state: show login button in header and show auth modal
+        // Logged-out state: show login button in header
         updateAuthUI(false);
-        openLoginModal();
       } else {
         // Logged-in state
         updateAuthUI(true);
-        closeLoginModal();
-        initApp();
       }
+
+      initApp();
     }
 
     function openLoginModal() {
@@ -4648,16 +4650,14 @@
       // Disconnect and leave queue
       socket.emit('queue:leave');
 
-      // Update UI
+      // Update UI: return to Explore face of app with Login button visible
       const badge = document.getElementById('msgUnreadBadge');
       if (badge) badge.style.display = 'none';
       updateAuthUI(false);
       setStage('idle');
       closeProfileDrawer();
+      closeLoginModal();
       switchMainView('explore');
-
-      // Open login modal for next session
-      openLoginModal();
     }
 
     function selectOnboardGender(gender) {
@@ -4740,16 +4740,20 @@
     async function initApp() {
       updateUserUI();
       await fetchConfig();
-      await fetchUserProfile();
-      await fetchAnchors();
-      await fetchWallet();
-      if (state.user.gender === 'female') {
-        await fetchCreatorEarnings();
+      if (isUserLoggedIn()) {
+        await fetchUserProfile();
       }
-      await fetchConversations();
+      await fetchAnchors();
+      if (isUserLoggedIn()) {
+        await fetchWallet();
+        if (state.user.gender === 'female') {
+          await fetchCreatorEarnings();
+        }
+        await fetchConversations();
+      }
       animateLiveCounter();
 
-      // Set Explore as initial active view
+      // Set Explore as initial active view (Image 1 face of the app)
       switchMainView('explore');
 
       // Show PWA banner after 2s
@@ -4758,13 +4762,15 @@
         if (b && !localStorage.getItem('jirani_pwa_dismissed')) b.style.display = 'block';
       }, 2000);
 
-      socket.emit('user:register', {
-        userId: state.user.id,
-        displayName: state.user.displayName,
-        city: state.user.city,
-        gender: state.user.gender,
-        avatar: state.user.avatar
-      });
+      if (isUserLoggedIn()) {
+        socket.emit('user:register', {
+          userId: state.user.id,
+          displayName: state.user.displayName,
+          city: state.user.city,
+          gender: state.user.gender,
+          avatar: state.user.avatar
+        });
+      }
 
       // Socket: live message received
       // Server emits: { peerId, message: { sender, text, timestamp }, conversation }
