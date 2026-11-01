@@ -12,3 +12,4 @@ services:
         value: 92bfa202f8a94e23add6ed84e72e6317
       - key: MPESA_ENVIRONMENT
         value: live
+
