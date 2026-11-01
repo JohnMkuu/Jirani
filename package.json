@@ -1,0 +1,32 @@
+{
+  "name": "jirani-live",
+  "version": "1.0.0",
+  "description": "Jirani - Kenya-focused social discovery and 1v1 random video chat platform with Agora RTC and Safaricom M-Pesa",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node tests/run-all.js"
+  },
+  "keywords": [
+    "jirani",
+    "agora",
+    "video-chat",
+    "kenya",
+    "m-pesa",
+    "socket.io",
+    "webrtc"
+  ],
+  "author": "Antigravity Engineering",
+  "license": "ISC",
+  "dependencies": {
+    "agora-token": "^2.0.7",
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.4",
+    "uuid": "^10.0.0"
+  }
+}
