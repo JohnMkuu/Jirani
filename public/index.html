@@ -5284,22 +5284,17 @@
         || ((state.user.hasCustomPhoto && state.user.avatar) ? state.user.avatar : generateInitialAvatar(name));
 
       try {
+        const effectiveEmail = email || (_firebaseUser ? _firebaseUser.email : '') || '';
         const body = {
           provider,
+          email: effectiveEmail,
           displayName: name,
-          gender,
+          gender: gender || 'male',
           avatar,
-          isVerifiedFemale: !!isVerifiedFemale
+          isVerifiedFemale: !!isVerifiedFemale,
+          idToken: idToken || null
         };
-
-        // Firebase Google login — send idToken for server verification
-        if (idToken) {
-          body.idToken = idToken;
-        } else {
-          // Legacy email path (tests)
-          body.email    = email;
-          body.password = password;
-        }
+        if (password) body.password = password;
 
         const authRes  = await fetch('/api/auth/login', {
           method:  'POST',
