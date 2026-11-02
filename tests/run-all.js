@@ -196,11 +196,11 @@ async function runTests() {
       let matchedSessionId = null;
 
       clientA.on('connect', () => {
-        clientA.emit('user:register', { userId: 'alice_nbo', displayName: 'Alice' });
+        clientA.emit('user:register', { userId: 'alice_nbo', displayName: 'Alice', gender: 'female' });
       });
 
       clientB.on('connect', () => {
-        clientB.emit('user:register', { userId: 'bob_msa', displayName: 'Bob' });
+        clientB.emit('user:register', { userId: 'bob_msa', displayName: 'Bob', gender: 'male' });
       });
 
       clientA.on('user:registered', () => {
@@ -427,14 +427,13 @@ async function runTests() {
     await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_1' } });
     await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_woman_1' } });
 
-    // 6. Test Two Men: A man joins when only another man is around
+    // 6. Test Solo User: A user joins when no one else is in queue
     const manSolo = await apiRequest('/api/match/join', {
       method: 'POST',
       body: { userId: 'test_man_solo', gender: 'male' }
     });
     assert(manSolo.status === 200, 'Searching man joins');
-    assert(manSolo.data.status === 'matched', 'Searching man matched immediately');
-    assert(manSolo.data.session.remoteUser.gender === 'female', 'Man NEVER matched with man — paired with female anchor creator');
+    assert(manSolo.data.status === 'waiting', 'Solo man waits in queue (no fake hardcoded avatar match)');
     await apiRequest('/api/match/leave', { method: 'POST', body: { userId: 'test_man_solo' } });
 
   } catch (err) {

@@ -1815,14 +1815,19 @@ app.post('/api/auth/login', async (req, res) => {
 
   // ── Legacy email path (tests + fallback) ──────────────────────────────────
   } else {
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'A valid email address is required.' });
+    if (provider === 'guest') {
+      verifiedEmail = (email || `guest_${Date.now()}_${Math.random().toString(36).substr(2, 4)}@jirani.live`).toLowerCase().trim();
+      verifiedName  = displayName || `Guest #${Math.floor(1000 + Math.random() * 9000)}`;
+    } else {
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'A valid email address is required.' });
+      }
+      if (provider !== 'google' && (!password || password.length < 6)) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+      }
+      verifiedEmail = email.toLowerCase().trim();
+      verifiedName  = displayName || verifiedEmail.split('@')[0].replace(/[._]/g, ' ');
     }
-    if (provider !== 'google' && (!password || password.length < 6)) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-    }
-    verifiedEmail = email.toLowerCase().trim();
-    verifiedName  = displayName || verifiedEmail.split('@')[0].replace(/[._]/g, ' ');
   }
 
   // Check if requested userId is already banned (Anti-Fraud)
@@ -2282,40 +2287,48 @@ app.post('/api/match/join', (req, res) => {
     return res.json({ status: 'matched', session });
   }
 
-  // Deduct token or ticket from male user if needed
-  if (myGender === 'male') {
-    const callerWallet = db.wallets.get(userId) || { balance: 100 };
-    if (currentUser.matchTickets > 0) {
-      currentUser.matchTickets -= 1;
-    } else if (callerWallet && callerWallet.balance >= 3) {
-      callerWallet.balance -= 3;
-      recordLedger(userId, 'call_fee', -3, '1v1 Match fee (3 tokens)');
-    }
-  }
-
   // Remove stale entries from httpQueue (> 45s old)
   const now = Date.now();
   db.httpQueue = db.httpQueue.filter(q => q.userId !== userId && (now - q.joinedAt < 45000));
 
-  // Search httpQueue for a candidate of OPPOSITE gender (Man to Woman only!)
+  // Search httpQueue for a candidate
   let candidateIndex = -1;
   for (let i = 0; i < db.httpQueue.length; i++) {
     const candidate = db.httpQueue[i];
     if (candidate.userId === userId) continue;
     if (isPairBlocked(userId, candidate.userId)) continue;
 
-    // Strict Man-Woman matching rule
-    if (myGender === 'male' && candidate.gender !== 'female') continue;
-    if (myGender === 'female' && candidate.gender !== 'male') continue;
-
-    candidateIndex = i;
-    break;
+    // Strict Man-Woman matching rule when opposite genders are present
+    if (myGender === 'male' && candidate.gender === 'female') {
+      candidateIndex = i;
+      break;
+    }
+    if (myGender === 'female' && candidate.gender === 'male') {
+      candidateIndex = i;
+      break;
+    }
+    // If neither is strictly constrained or gender is unspecified, allow match
+    if ((!myGender || myGender === 'any') || (!candidate.gender || candidate.gender === 'any')) {
+      candidateIndex = i;
+      break;
+    }
   }
 
   if (candidateIndex !== -1) {
-    // Found real human match of opposite gender!
+    // Found real human match!
     const [candidate] = db.httpQueue.splice(candidateIndex, 1);
     const candidateUser = db.users.get(candidate.userId) || { id: candidate.userId, displayName: 'Partner', gender: candidate.gender };
+
+    // Deduct token or ticket from male user now that real match is found
+    if (myGender === 'male') {
+      const callerWallet = db.wallets.get(userId) || { balance: 100 };
+      if (currentUser.matchTickets > 0) {
+        currentUser.matchTickets -= 1;
+      } else if (callerWallet && callerWallet.balance >= 3) {
+        callerWallet.balance -= 3;
+        recordLedger(userId, 'call_fee', -3, '1v1 Match fee (3 tokens)');
+      }
+    }
 
     const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const channelName = `jirani_${sessionId}`;
@@ -2327,6 +2340,7 @@ app.post('/api/match/join', (req, res) => {
     const sessionA = {
       sessionId,
       channelName,
+      role: 'userA',
       localUid: userAUid,
       remoteUid: userBUid,
       agoraToken: tokenA,
@@ -2336,6 +2350,7 @@ app.post('/api/match/join', (req, res) => {
     const sessionB = {
       sessionId,
       channelName,
+      role: 'userB',
       localUid: userBUid,
       remoteUid: userAUid,
       agoraToken: tokenB,
@@ -2349,42 +2364,15 @@ app.post('/api/match/join', (req, res) => {
     return res.json({ status: 'matched', session: sessionA });
   }
 
-  // If user is a Man and no real woman in queue right now:
-  // Immediately pair him with an active verified female anchor/creator (Sarah, Niki, etc.)
-  if (myGender === 'male') {
-    const availableAnchors = seedAnchors.filter(a => a.gender === 'female' && !isPairBlocked(userId, a.id));
-    const anchor = availableAnchors.length > 0
-      ? availableAnchors[Math.floor(Math.random() * availableAnchors.length)]
-      : seedAnchors[0];
-
-    const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const channelName = `jirani_${sessionId}`;
-    const userAUid = Math.floor(100000 + Math.random() * 899999);
-    const anchorUid = Math.floor(100000 + Math.random() * 899999);
-    const tokenA = generateAgoraToken(channelName, userAUid);
-
-    const session = {
-      sessionId,
-      channelName,
-      localUid: userAUid,
-      remoteUid: anchorUid,
-      agoraToken: tokenA,
-      appId: AGORA_APP_ID,
-      remoteUser: anchor
-    };
-
-    db.activeHttpSessions.set(userId, session);
-    return res.json({ status: 'matched', session });
-  }
-
-  // If user is Female, add to queue so men can connect to her
+  // No real person found in queue yet: add to queue to wait for the next real user.
+  // ONLY real people match - NEVER pair with hardcoded fake avatars or seed bots!
   db.httpQueue.push({
     userId,
-    gender: 'female',
+    gender: myGender,
     joinedAt: now
   });
 
-  return res.json({ status: 'waiting', message: 'Waiting for a male caller' });
+  return res.json({ status: 'waiting', message: 'Waiting for a partner' });
 });
 
 app.get('/api/match/poll/:userId', (req, res) => {
@@ -3237,6 +3225,9 @@ app.post('/api/admin/withdrawals/:id/resolve', (req, res) => {
 // Socket.IO Matchmaking & Real-Time Engine
 // ==========================================
 
+// Shared WebRTC P2P Fallback Rooms Map (across all socket connections)
+const webrtcRooms = new Map(); // channelName -> { peers: [socketId,...] }
+
 io.on('connection', (socket) => {
   // Store socket metadata
   let currentUserId = null;
@@ -3334,15 +3325,19 @@ io.on('connection', (socket) => {
         // Rule 4: Cannot match with blocked accounts
         if (isPairBlocked(currentUserId, candidate.userId)) continue;
 
-        // Rule 5: Strict Gender Matching: Man MUST be matched to Woman
-        const myGender = (currentUser?.gender || 'male').toLowerCase();
-        const theirGender = (candidateUser?.gender || 'female').toLowerCase();
-        if (myGender === 'male' && theirGender !== 'female') {
-          continue; // A man can only match with a woman
-        }
-        if (myGender === 'female' && theirGender !== 'male') {
-          continue; // A woman can only match with a man
-        }
+        // Rule 5: Gender Matching: Prioritize opposite gender (Man <-> Woman) or match real people
+        const myGender = (currentUser?.gender || '').toLowerCase();
+        const theirGender = (candidateUser?.gender || '').toLowerCase();
+        const myPref = (filters?.genderPreference || '').toLowerCase();
+        const theirPref = (candidate.filters?.genderPreference || '').toLowerCase();
+
+        // If specific preference set, enforce it
+        if (myPref && myPref !== 'any' && theirGender && theirGender !== myPref) continue;
+        if (theirPref && theirPref !== 'any' && myGender && myGender !== theirPref) continue;
+
+        // If both are male and either strictly requested a female
+        if (myGender === 'male' && theirGender === 'male' && (myPref === 'female' || theirPref === 'female')) continue;
+        if (myGender === 'female' && theirGender === 'female' && (myPref === 'male' || theirPref === 'male')) continue;
 
         matchedIndex = i;
         break;
@@ -3458,7 +3453,8 @@ io.on('connection', (socket) => {
 
         console.log(`[Match Created] Session ${sessionId} between real users ${userA?.displayName} and ${userB?.displayName} on channel ${channelName}`);
       } else {
-        // No real person found in queue yet: add to queue to wait for the next real user
+        // No real person found in queue yet: add to queue to wait for the next real user.
+        // ONLY real people match - NEVER pair with hardcoded fake avatars!
         db.queue.push({
           socketId: socket.id,
           userId: currentUserId,
@@ -3472,72 +3468,6 @@ io.on('connection', (socket) => {
         });
 
         console.log(`[Queue Waiting] Real user ${currentUser?.displayName} (${currentUserId}) waiting for a partner in queue. Queue size: ${db.queue.length}`);
-
-        // Intelligent Live Matching:
-        // If a man is searching and no other female user joins within 1.2 seconds,
-        // automatically connect him with an active verified female anchor creator room
-        if (socket.currentMatchTimeout) clearTimeout(socket.currentMatchTimeout);
-        if (filters.autoMatchAnchor !== false) {
-          socket.currentMatchTimeout = setTimeout(() => {
-            const queueItemIndex = db.queue.findIndex(q => q.socketId === socket.id);
-            if (queueItemIndex === -1) return; // already paired or left
-            db.queue.splice(queueItemIndex, 1);
-
-            const availableAnchors = seedAnchors.filter(a => a.gender === 'female' && !isPairBlocked(currentUserId, a.id));
-            const anchor = availableAnchors.length > 0 
-              ? availableAnchors[Math.floor(Math.random() * availableAnchors.length)]
-              : seedAnchors[0];
-
-            const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-            const channelName = `jirani_${sessionId}`;
-            const userAUid = Math.floor(100000 + Math.random() * 899999);
-            const anchorUid = Math.floor(100000 + Math.random() * 899999);
-            const tokenA = generateAgoraToken(channelName, userAUid);
-
-            // Deduct ticket or 3 tokens if male
-            if (currentUser.gender === 'male') {
-              const callerWallet = db.wallets.get(currentUser.id);
-              if (currentUser.matchTickets > 0) {
-                currentUser.matchTickets -= 1;
-              } else if (callerWallet && callerWallet.balance >= 3) {
-                callerWallet.balance -= 3;
-                callerWallet.totalSpentCoins += 3;
-                recordLedger(currentUser.id, 'call_fee', -3, `1v1 Video chat match with ${anchor.displayName}`);
-                socket.emit('wallet:updated', { newBalance: callerWallet.balance });
-              }
-            }
-
-            const session = {
-              sessionId,
-              channelName,
-              userAId: currentUserId,
-              userBId: anchor.id,
-              userAUid,
-              userBUid: anchorUid,
-              socketAId: socket.id,
-              creator: anchor,
-              startedAt: new Date().toISOString(),
-              status: 'active'
-            };
-            db.matchSessions.set(sessionId, session);
-            socket.currentSessionId = sessionId;
-            currentSessionId = sessionId;
-            socket.join(channelName);
-
-            socket.emit('match:found', {
-              sessionId,
-              channelName,
-              role: 'userA',
-              localUid: userAUid,
-              remoteUid: anchorUid,
-              remoteUser: anchor,
-              agoraToken: tokenA,
-              appId: AGORA_APP_ID
-            });
-
-            console.log(`[Live Match Found] User ${currentUser.displayName} matched with verified creator ${anchor.displayName} on channel ${channelName}`);
-          }, 4000);
-        }
       }
     } catch (err) {
       console.error('[queue:join error]:', err);
@@ -3766,8 +3696,6 @@ io.on('connection', (socket) => {
   });
 
   // 8a. WebRTC P2P Fallback Signaling (used when Agora cert is unavailable)
-  const webrtcRooms = new Map(); // channelName -> { peers: [socketId,...] }
-
   socket.on('webrtc:join', (data) => {
     try {
       const { channelName, uid } = data || {};
@@ -3804,10 +3732,17 @@ io.on('connection', (socket) => {
     try {
       const { channelName, offer, targetSocketId } = data || {};
       if (!channelName || !offer) return;
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      let targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
+      if (!targetSocket) {
+        const room = webrtcRooms.get(channelName);
+        if (room) {
+          const peerId = room.peers.find(p => p !== socket.id);
+          if (peerId) targetSocket = io.sockets.sockets.get(peerId);
+        }
+      }
       if (targetSocket) {
         targetSocket.emit('webrtc:offer', { channelName, offer, fromSocketId: socket.id });
-        console.log(`[WebRTC] Relayed offer from ${socket.id} to ${targetSocketId} on ${channelName}`);
+        console.log(`[WebRTC] Relayed offer from ${socket.id} to ${targetSocket.id} on ${channelName}`);
       }
     } catch (err) {
       console.error('[webrtc:offer error]:', err);
@@ -3818,10 +3753,17 @@ io.on('connection', (socket) => {
     try {
       const { channelName, answer, targetSocketId } = data || {};
       if (!channelName || !answer) return;
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      let targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
+      if (!targetSocket) {
+        const room = webrtcRooms.get(channelName);
+        if (room) {
+          const peerId = room.peers.find(p => p !== socket.id);
+          if (peerId) targetSocket = io.sockets.sockets.get(peerId);
+        }
+      }
       if (targetSocket) {
         targetSocket.emit('webrtc:answer', { channelName, answer, fromSocketId: socket.id });
-        console.log(`[WebRTC] Relayed answer from ${socket.id} to ${targetSocketId} on ${channelName}`);
+        console.log(`[WebRTC] Relayed answer from ${socket.id} to ${targetSocket.id} on ${channelName}`);
       }
     } catch (err) {
       console.error('[webrtc:answer error]:', err);
@@ -3966,6 +3908,12 @@ io.on('connection', (socket) => {
     try {
       // Clean up queue
       db.queue = db.queue.filter(q => q.socketId !== socket.id);
+
+      // Clean up webrtcRooms
+      webrtcRooms.forEach((room, cName) => {
+        room.peers = room.peers.filter(p => p !== socket.id);
+        if (room.peers.length === 0) webrtcRooms.delete(cName);
+      });
 
       // Clean up active session
       if (currentSessionId) {
