@@ -1585,7 +1585,7 @@ function getOrCreateUser(userId, initialData = {}) {
   if (!user) {
     const gender = initialData.gender || 'male'; // Default male seeker unless specified
     const isFemale = gender === 'female';
-    const displayName = initialData.displayName || initialData.username || `Jirani User #${userId.slice(-4)}`;
+    const displayName = initialData.displayName || initialData.username || 'Jirani Member';
 
     user = {
       id: userId,
@@ -1739,7 +1739,7 @@ function isPairBlocked(userAId, userBId) {
 app.get('/api/config', (req, res) => {
   const cert = AGORA_APP_CERTIFICATE.trim();
   const certConfigured = !!(cert && cert.length >= 20 && !cert.includes('REPLACE_WITH'));
-  
+
   res.json({
     success: true,
     appName: 'Jirani Live',
@@ -1783,11 +1783,11 @@ app.post('/api/auth/login', async (req, res) => {
     userId: requestedUserId
   } = req.body;
 
-  let verifiedEmail    = '';
-  let verifiedName     = '';
+  let verifiedEmail = '';
+  let verifiedName = '';
   let verifiedPhotoURL = '';
-  let verifiedUid      = '';
-  let authProvider     = provider || 'email';
+  let verifiedUid = '';
+  let authProvider = provider || 'email';
 
   // ── Firebase Google path ───────────────────────────────────────────────────
   if (idToken) {
@@ -1804,20 +1804,20 @@ app.post('/api/auth/login', async (req, res) => {
     if (!decoded) {
       return res.status(401).json({
         success: false,
-        error:   'Invalid or expired Google token. Please sign in again.'
+        error: 'Invalid or expired Google token. Please sign in again.'
       });
     }
-    verifiedEmail    = (decoded.email || email || '').toLowerCase().trim();
-    verifiedName     = displayName || decoded.name || verifiedEmail.split('@')[0];
+    verifiedEmail = (decoded.email || email || '').toLowerCase().trim();
+    verifiedName = displayName || decoded.name || verifiedEmail.split('@')[0];
     verifiedPhotoURL = avatar || decoded.picture || '';
-    verifiedUid      = `fb_${decoded.uid || Buffer.from(verifiedEmail).toString('hex').slice(0, 12)}`;
-    authProvider     = 'google';
+    verifiedUid = `fb_${decoded.uid || Buffer.from(verifiedEmail).toString('hex').slice(0, 12)}`;
+    authProvider = 'google';
 
-  // ── Legacy email path (tests + fallback) ──────────────────────────────────
+    // ── Legacy email path (tests + fallback) ──────────────────────────────────
   } else {
     if (provider === 'guest') {
       verifiedEmail = (email || `guest_${Date.now()}_${Math.random().toString(36).substr(2, 4)}@jirani.live`).toLowerCase().trim();
-      verifiedName  = displayName || `Guest #${Math.floor(1000 + Math.random() * 9000)}`;
+      verifiedName = displayName || `Guest #${Math.floor(1000 + Math.random() * 9000)}`;
     } else {
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).json({ error: 'A valid email address is required.' });
@@ -1826,7 +1826,7 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(400).json({ error: 'Password must be at least 6 characters.' });
       }
       verifiedEmail = email.toLowerCase().trim();
-      verifiedName  = displayName || verifiedEmail.split('@')[0].replace(/[._]/g, ' ');
+      verifiedName = displayName || verifiedEmail.split('@')[0].replace(/[._]/g, ' ');
     }
   }
 
@@ -1875,10 +1875,10 @@ app.post('/api/auth/login', async (req, res) => {
 
   const user = getOrCreateUser(userId, {
     displayName: resolvedName,
-    gender:      gender || (existingUser ? existingUser.gender : 'male'),
-    avatar:      resolvedAvatar
+    gender: gender || (existingUser ? existingUser.gender : 'male'),
+    avatar: resolvedAvatar
   });
-  user.email        = cleanEmail;
+  user.email = cleanEmail;
   user.authProvider = authProvider;
   if (verifiedUid) user.firebaseUid = verifiedUid;
   if (isVerifiedFemale) user.isVerifiedFemale = true;
@@ -2063,7 +2063,20 @@ app.post('/api/profile/update', (req, res) => {
   }
 
   const user = getOrCreateUser(userId, { displayName, city, bio, gender, age: parseInt(age || 20, 10), avatar });
-  if (avatar) user.avatar = avatar;
+  if (displayName && displayName.trim()) {
+    user.displayName = displayName.trim();
+    if (!user.hasCustomPhoto && (!user.avatar || user.avatar.includes('data:image/svg+xml') || user.avatar.includes('generateInitialAvatar'))) {
+      user.avatar = generateInitialAvatarSvg(user.displayName);
+    }
+  }
+  if (city && city.trim()) user.city = city.trim();
+  if (bio && bio.trim()) user.bio = bio.trim();
+  if (gender) user.gender = gender;
+  if (age) user.age = parseInt(age, 10);
+  if (avatar) {
+    user.avatar = avatar;
+    user.hasCustomPhoto = true;
+  }
   if (email) user.email = email.toLowerCase().trim();
   res.json({ success: true, user });
 });
@@ -2229,8 +2242,8 @@ app.post('/api/creator/withdraw', (req, res) => {
     const txId = normMethod === 'USDT'
       ? `0x${uuidv4().replace(/-/g, '')}`
       : normMethod === 'MPESA'
-      ? `NLK${Date.now().toString().slice(-6)}${Math.random().toString(36).substr(2, 3).toUpperCase()}`
-      : `PAYPAL_${Date.now()}_${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+        ? `NLK${Date.now().toString().slice(-6)}${Math.random().toString(36).substr(2, 3).toUpperCase()}`
+        : `PAYPAL_${Date.now()}_${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
 
     const withdrawal = {
       id: withdrawalId,
@@ -2381,6 +2394,7 @@ app.get('/api/match/poll/:userId', (req, res) => {
     const session = db.activeHttpSessions.get(userId);
     return res.json({ status: 'matched', session });
   }
+
   return res.json({ status: 'waiting' });
 });
 
@@ -3244,6 +3258,12 @@ io.on('connection', (socket) => {
       socket.join(`user_${userId}`);
 
       const user = getOrCreateUser(userId, { displayName, city, gender, age, avatar });
+      if (displayName && displayName.trim()) {
+        user.displayName = displayName.trim();
+        if (!user.hasCustomPhoto && (!user.avatar || user.avatar.includes('data:image/svg+xml') || user.avatar.includes('generateInitialAvatar'))) {
+          user.avatar = generateInitialAvatarSvg(user.displayName);
+        }
+      }
       user.status = 'online';
 
       socket.emit('user:registered', {
@@ -3255,6 +3275,28 @@ io.on('connection', (socket) => {
       console.log(`[Socket Connected] User ${userId} (${user.displayName}) connected on socket ${socket.id}`);
     } catch (err) {
       console.error('[user:register error]:', err);
+    }
+  });
+
+  socket.on('user:update_profile', (data) => {
+    try {
+      const { userId, displayName, city, bio } = data || {};
+      const uid = userId || currentUserId || socket.userId;
+      if (!uid) return;
+      const user = db.users.get(uid);
+      if (user) {
+        if (displayName && displayName.trim()) {
+          user.displayName = displayName.trim();
+          if (!user.hasCustomPhoto && (!user.avatar || user.avatar.includes('data:image/svg+xml') || user.avatar.includes('generateInitialAvatar'))) {
+            user.avatar = generateInitialAvatarSvg(user.displayName);
+          }
+        }
+        if (city && city.trim()) user.city = city.trim();
+        if (bio && bio.trim()) user.bio = bio.trim();
+        socket.emit('user:updated', { user });
+      }
+    } catch (e) {
+      console.error('[user:update_profile error]:', e);
     }
   });
 
@@ -3454,7 +3496,6 @@ io.on('connection', (socket) => {
         console.log(`[Match Created] Session ${sessionId} between real users ${userA?.displayName} and ${userB?.displayName} on channel ${channelName}`);
       } else {
         // No real person found in queue yet: add to queue to wait for the next real user.
-        // ONLY real people match - NEVER pair with hardcoded fake avatars!
         db.queue.push({
           socketId: socket.id,
           userId: currentUserId,
@@ -3468,6 +3509,7 @@ io.on('connection', (socket) => {
         });
 
         console.log(`[Queue Waiting] Real user ${currentUser?.displayName} (${currentUserId}) waiting for a partner in queue. Queue size: ${db.queue.length}`);
+
       }
     } catch (err) {
       console.error('[queue:join error]:', err);
@@ -3906,6 +3948,7 @@ io.on('connection', (socket) => {
   // 9. Disconnect & Cleanup
   socket.on('disconnect', () => {
     try {
+      if (socket.currentMatchTimeout) clearTimeout(socket.currentMatchTimeout);
       // Clean up queue
       db.queue = db.queue.filter(q => q.socketId !== socket.id);
 
