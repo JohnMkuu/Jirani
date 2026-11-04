@@ -3737,34 +3737,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 8a. WebRTC P2P Fallback Signaling (used when Agora cert is unavailable)
+  // 8a. WebRTC P2P Fallback Signaling (direct & room-based for physical camera-to-camera)
   socket.on('webrtc:join', (data) => {
     try {
       const { channelName, uid } = data || {};
       if (!channelName) return;
+      socket.join(channelName);
 
       if (!webrtcRooms.has(channelName)) {
         webrtcRooms.set(channelName, { peers: [] });
       }
       const room = webrtcRooms.get(channelName);
-
       if (!room.peers.includes(socket.id)) {
         room.peers.push(socket.id);
       }
 
-      console.log(`[WebRTC] ${currentUserId} joined WebRTC room ${channelName}. Peers: ${room.peers.length}`);
-
-      // If there are 2 peers, tell the second one to create an offer
-      if (room.peers.length === 2) {
-        const [peerASocketId, peerBSocketId] = room.peers;
-        const peerASocket = io.sockets.sockets.get(peerASocketId);
-        const peerBSocket = io.sockets.sockets.get(peerBSocketId);
-        // Tell the second joiner to create offer and send to the first
-        if (peerBSocket) {
-          peerBSocket.emit('webrtc:create_offer', { channelName, targetSocketId: peerASocketId });
-        }
-        console.log(`[WebRTC] Room ${channelName} ready - instructing peer B to create offer`);
-      }
+      console.log(`[WebRTC] ${currentUserId} joined WebRTC channel ${channelName}`);
+      // Notify other peer in the room that this peer is ready for negotiation
+      socket.to(channelName).emit('webrtc:peer_ready', { channelName, fromSocketId: socket.id, uid });
     } catch (err) {
       console.error('[webrtc:join error]:', err);
     }
@@ -3774,18 +3764,28 @@ io.on('connection', (socket) => {
     try {
       const { channelName, offer, targetSocketId } = data || {};
       if (!channelName || !offer) return;
-      let targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
-      if (!targetSocket) {
-        const room = webrtcRooms.get(channelName);
-        if (room) {
-          const peerId = room.peers.find(p => p !== socket.id);
-          if (peerId) targetSocket = io.sockets.sockets.get(peerId);
+
+      // 1. Send to all other sockets in this match channel room
+      socket.to(channelName).emit('webrtc:offer', { channelName, offer, fromSocketId: socket.id });
+
+      // 2. Direct socket relay if targetSocketId is provided
+      if (targetSocketId) {
+        const target = io.sockets.sockets.get(targetSocketId);
+        if (target) target.emit('webrtc:offer', { channelName, offer, fromSocketId: socket.id });
+      }
+
+      // 3. Session lookup fallback
+      for (const session of db.matchSessions.values()) {
+        if (session.channelName === channelName && session.status === 'active') {
+          const peerSocketId = session.socketAId === socket.id ? session.socketBId : session.socketAId;
+          if (peerSocketId) {
+            const peerSocket = io.sockets.sockets.get(peerSocketId);
+            if (peerSocket) peerSocket.emit('webrtc:offer', { channelName, offer, fromSocketId: socket.id });
+          }
         }
       }
-      if (targetSocket) {
-        targetSocket.emit('webrtc:offer', { channelName, offer, fromSocketId: socket.id });
-        console.log(`[WebRTC] Relayed offer from ${socket.id} to ${targetSocket.id} on ${channelName}`);
-      }
+
+      console.log(`[WebRTC] Relayed offer on channel ${channelName} from ${socket.id}`);
     } catch (err) {
       console.error('[webrtc:offer error]:', err);
     }
@@ -3795,18 +3795,28 @@ io.on('connection', (socket) => {
     try {
       const { channelName, answer, targetSocketId } = data || {};
       if (!channelName || !answer) return;
-      let targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
-      if (!targetSocket) {
-        const room = webrtcRooms.get(channelName);
-        if (room) {
-          const peerId = room.peers.find(p => p !== socket.id);
-          if (peerId) targetSocket = io.sockets.sockets.get(peerId);
+
+      // 1. Send to all other sockets in this match channel room
+      socket.to(channelName).emit('webrtc:answer', { channelName, answer, fromSocketId: socket.id });
+
+      // 2. Direct socket relay if targetSocketId is provided
+      if (targetSocketId) {
+        const target = io.sockets.sockets.get(targetSocketId);
+        if (target) target.emit('webrtc:answer', { channelName, answer, fromSocketId: socket.id });
+      }
+
+      // 3. Session lookup fallback
+      for (const session of db.matchSessions.values()) {
+        if (session.channelName === channelName && session.status === 'active') {
+          const peerSocketId = session.socketAId === socket.id ? session.socketBId : session.socketAId;
+          if (peerSocketId) {
+            const peerSocket = io.sockets.sockets.get(peerSocketId);
+            if (peerSocket) peerSocket.emit('webrtc:answer', { channelName, answer, fromSocketId: socket.id });
+          }
         }
       }
-      if (targetSocket) {
-        targetSocket.emit('webrtc:answer', { channelName, answer, fromSocketId: socket.id });
-        console.log(`[WebRTC] Relayed answer from ${socket.id} to ${targetSocket.id} on ${channelName}`);
-      }
+
+      console.log(`[WebRTC] Relayed answer on channel ${channelName} from ${socket.id}`);
     } catch (err) {
       console.error('[webrtc:answer error]:', err);
     }
@@ -3814,19 +3824,27 @@ io.on('connection', (socket) => {
 
   socket.on('webrtc:ice_candidate', (data) => {
     try {
-      const { channelName, candidate } = data || {};
+      const { channelName, candidate, targetSocketId } = data || {};
       if (!channelName || !candidate) return;
-      const room = webrtcRooms.get(channelName);
-      if (room) {
-        // Relay ICE candidate to all other peers in the room
-        room.peers.forEach(peerId => {
-          if (peerId !== socket.id) {
-            const peerSocket = io.sockets.sockets.get(peerId);
-            if (peerSocket) {
-              peerSocket.emit('webrtc:ice_candidate', { channelName, candidate, fromSocketId: socket.id });
-            }
+
+      // 1. Send to all other sockets in this match channel room
+      socket.to(channelName).emit('webrtc:ice_candidate', { channelName, candidate, fromSocketId: socket.id });
+
+      // 2. Direct socket relay if targetSocketId is provided
+      if (targetSocketId) {
+        const target = io.sockets.sockets.get(targetSocketId);
+        if (target) target.emit('webrtc:ice_candidate', { channelName, candidate, fromSocketId: socket.id });
+      }
+
+      // 3. Session lookup fallback
+      for (const session of db.matchSessions.values()) {
+        if (session.channelName === channelName && session.status === 'active') {
+          const peerSocketId = session.socketAId === socket.id ? session.socketBId : session.socketAId;
+          if (peerSocketId) {
+            const peerSocket = io.sockets.sockets.get(peerSocketId);
+            if (peerSocket) peerSocket.emit('webrtc:ice_candidate', { channelName, candidate, fromSocketId: socket.id });
           }
-        });
+        }
       }
     } catch (err) {
       console.error('[webrtc:ice_candidate error]:', err);

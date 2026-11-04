@@ -7066,21 +7066,8 @@
       const remoteVideoEl = document.getElementById('remoteAgoraVideo');
       if (remoteVideoEl) remoteVideoEl.innerHTML = '';
 
-      // Ensure local camera preview is shown in PiP
-      if (!state.webrtc.localStream || !state.webrtc.localStream.active) {
-        try {
-          const res = await getLocalMediaStream();
-          state.webrtc.localStream = res.stream;
-        } catch (e) {
-          console.warn('[Camera acquire warning]:', e);
-        }
-      }
-      if (state.webrtc.localStream) {
-        showLocalStreamInPiP(state.webrtc.localStream);
-      }
-
-      // Join Agora WebRTC channel with real peer
-      await joinAgora(data.channelName, data.localUid, data.agoraToken, data.appId || state.agora.appId);
+      // Start dual WebRTC P2P + Agora live camera streaming
+      await startRealTimeVideoSession(data.channelName, data.role, data.localUid, data.remoteUid, data.agoraToken, data.appId);
     }
 
     socket.on('match:found', handleMatchFound);
@@ -7112,77 +7099,40 @@
     }
 
     // ==========================================================
-    // WEBRTC P2P FALLBACK SOCKET EVENT HANDLERS
-    // ==========================================================
-    socket.on('webrtc:create_offer', async (data) => {
-      const { channelName, targetSocketId } = data || {};
-      if (!state.webrtc.pc) return;
-      try {
-        const offer = await state.webrtc.pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-        await state.webrtc.pc.setLocalDescription(offer);
-        socket.emit('webrtc:offer', { channelName, offer, targetSocketId });
-        console.log('[WebRTC] Offer created and sent to', targetSocketId);
-      } catch (err) {
-        console.error('[WebRTC createOffer error]:', err);
-      }
-    });
-
-    socket.on('webrtc:offer', async (data) => {
-      const { channelName, offer, fromSocketId } = data || {};
-      if (!state.webrtc.pc) return;
-      try {
-        await state.webrtc.pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await state.webrtc.pc.createAnswer();
-        await state.webrtc.pc.setLocalDescription(answer);
-        socket.emit('webrtc:answer', { channelName, answer, targetSocketId: fromSocketId });
-        console.log('[WebRTC] Answer created and sent to', fromSocketId);
-      } catch (err) {
-        console.error('[WebRTC offer handler error]:', err);
-      }
-    });
-
-    socket.on('webrtc:answer', async (data) => {
-      const { answer } = data || {};
-      if (!state.webrtc.pc) return;
-      try {
-        await state.webrtc.pc.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log('[WebRTC] Remote description (answer) set!');
-      } catch (err) {
-        console.error('[WebRTC answer handler error]:', err);
-      }
-    });
-
-    socket.on('webrtc:ice_candidate', async (data) => {
-      const { candidate } = data || {};
-      if (!state.webrtc.pc || !candidate) return;
-      try {
-        await state.webrtc.pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        // Ignore benign ICE errors
-      }
-    });
-
-    // ==========================================================
-    // AGORA RTC CLIENT & LIVE CAMERA ENGINE (with WebRTC Fallback)
+    // REAL-TIME VIDEO ENGINE (DIRECT WEBRTC P2P + AGORA HYBRID)
     // ==========================================================
 
-    // Helper: Get local media stream (real camera or virtual)
-    async function getLocalMediaStream() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-          audio: true
-        });
-        console.log('[Camera] Physical camera & mic acquired!');
-        return { stream, isReal: true };
-      } catch (err) {
-        console.warn('[Camera] Real camera blocked/unavailable, using virtual camera:', err.message);
-        const vStream = getOrCreateVirtualCamera(state.user.displayName, state.user.avatar);
-        return { stream: vStream, isReal: false };
+    let _pendingIceCandidates = [];
+    let _remoteDescriptionSet = false;
+    let _offerRetryInterval = null;
+    let _webrtcSignalPollTimer = null;
+    let _lastSignalTimestamp = 0;
+
+    // Attach any live media stream to the full-stage remote video element
+    function attachRemoteStream(stream) {
+      if (!stream) return;
+      const placeholder = document.getElementById('remotePlaceholder');
+      if (placeholder) placeholder.style.display = 'none';
+      const remoteContainer = document.getElementById('remoteAgoraVideo');
+      if (!remoteContainer) return;
+
+      let vid = remoteContainer.querySelector('video');
+      if (!vid) {
+        remoteContainer.innerHTML = '';
+        vid = document.createElement('video');
+        vid.autoplay = true;
+        vid.playsInline = true;
+        vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;';
+        remoteContainer.appendChild(vid);
       }
+      if (vid.srcObject !== stream) {
+        vid.srcObject = stream;
+      }
+      vid.play().catch(e => console.warn('[Remote Video Play]', e));
+      console.log('[RealTime Video] ✅ Attached remote camera stream to display!');
     }
 
-    // Helper: Show local stream in PiP video box
+    // Helper: Show local camera in the top-right PiP container
     function showLocalStreamInPiP(stream) {
       const localContainer = document.getElementById('localAgoraVideo');
       if (!localContainer) return;
@@ -7197,9 +7147,7 @@
       vid.play().catch(e => console.warn('Local PiP play warning:', e));
     }
 
-    let _webrtcSignalPollTimer = null;
-    let _lastSignalTimestamp = 0;
-
+    // Send WebRTC signaling payload via both Socket.IO and REST fallback
     async function sendWebRTCSignal(channelName, type, payload) {
       if (typeof socket !== 'undefined' && socket && socket.connected) {
         if (type === 'offer') socket.emit('webrtc:offer', { channelName, offer: payload });
@@ -7220,8 +7168,99 @@
       } catch (e) {}
     }
 
-    async function joinAgora(channelName, uid, token, appId) {
-      // Step 1: Ensure local media stream is active and shown in PiP
+    // Socket.IO event listeners for WebRTC peer signaling
+    socket.on('webrtc:peer_ready', async (data) => {
+      console.log('[WebRTC] Peer is ready for offer on channel:', data?.channelName);
+      const isOfferer = (state.match && state.match.role === 'userA') || (String(state.match?.localUid || '0') > String(state.match?.remoteUid || '0'));
+      if (isOfferer && state.webrtc.pc && state.webrtc.pc.signalingState === 'stable') {
+        try {
+          const offer = await state.webrtc.pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+          await state.webrtc.pc.setLocalDescription(offer);
+          sendWebRTCSignal(data?.channelName || state.match?.channelName, 'offer', offer);
+          console.log('[WebRTC] Sent offer upon peer_ready');
+        } catch(e) {
+          console.warn('[WebRTC peer_ready offer error]:', e);
+        }
+      }
+    });
+
+    socket.on('webrtc:offer', async (data) => {
+      const { channelName, offer } = data || {};
+      if (!offer) return;
+      console.log('[WebRTC] Received offer on', channelName);
+      const pc = state.webrtc.pc;
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        _remoteDescriptionSet = true;
+        // Flush any queued candidates
+        while (_pendingIceCandidates.length > 0) {
+          const cand = _pendingIceCandidates.shift();
+          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch(e){}
+        }
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendWebRTCSignal(channelName || state.match?.channelName, 'answer', answer);
+        console.log('[WebRTC] Created and sent answer to peer');
+      } catch (err) {
+        console.error('[WebRTC offer error]:', err);
+      }
+    });
+
+    socket.on('webrtc:answer', async (data) => {
+      const { answer } = data || {};
+      if (!answer) return;
+      console.log('[WebRTC] Received answer from peer');
+      const pc = state.webrtc.pc;
+      if (!pc) return;
+      try {
+        if (pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          _remoteDescriptionSet = true;
+          while (_pendingIceCandidates.length > 0) {
+            const cand = _pendingIceCandidates.shift();
+            try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch(e){}
+          }
+          console.log('[WebRTC] Remote description (answer) set successfully!');
+        }
+      } catch (err) {
+        console.error('[WebRTC answer error]:', err);
+      }
+    });
+
+    socket.on('webrtc:ice_candidate', async (data) => {
+      const { candidate } = data || {};
+      if (!candidate) return;
+      const pc = state.webrtc.pc;
+      if (!pc) return;
+      if (!_remoteDescriptionSet || !pc.remoteDescription) {
+        _pendingIceCandidates.push(candidate);
+        return;
+      }
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {}
+    });
+
+    // Helper: Acquire local physical camera (falls back to active canvas stream if hardware camera is locked)
+    async function getLocalMediaStream() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          audio: true
+        });
+        console.log('[Camera] Physical camera & mic acquired!');
+        return { stream, isReal: true };
+      } catch (err) {
+        console.warn('[Camera] Real camera blocked/unavailable, using virtual camera:', err.message);
+        const vStream = getOrCreateVirtualCamera(state.user.displayName, state.user.avatar);
+        return { stream: vStream, isReal: false };
+      }
+    }
+
+    // Unified Real-Time Video Session: starts WebRTC P2P + Agora RTC concurrently
+    async function startRealTimeVideoSession(channelName, role, localUid, remoteUid, agoraToken, appId) {
+      // Step 1: Ensure local camera preview is shown in PiP
       let localStream = state.webrtc.localStream;
       if (!localStream || !localStream.active) {
         try {
@@ -7229,180 +7268,55 @@
           localStream = res.stream;
           state.webrtc.localStream = localStream;
         } catch (e) {
-          console.warn('[joinAgora] Media stream fetch error:', e);
+          console.warn('[Camera stream error]:', e);
         }
       }
       if (localStream) {
         showLocalStreamInPiP(localStream);
       }
 
-      // Step 2: Attempt Agora RTC connection
+      // Step 2: Establish direct WebRTC P2P connection (guarantees camera stream even without Agora cert)
       try {
-        if (state.agora.client) {
-          try { await state.agora.client.leave(); } catch(e){}
-          state.agora.client = null;
+        if (state.webrtc.pc) {
+          try { state.webrtc.pc.close(); } catch(e){}
+          state.webrtc.pc = null;
         }
+        _pendingIceCandidates = [];
+        _remoteDescriptionSet = false;
+        if (_offerRetryInterval) clearInterval(_offerRetryInterval);
 
-        const effectiveAppId = appId || state.agora.appId || '92bfa202f8a94e23add6ed84e72e6317';
-        const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
-        state.agora.client = client;
-
-        // Remote user published handler
-        client.on('user-published', async (user, mediaType) => {
-          try {
-            await client.subscribe(user, mediaType);
-            console.log(`[Agora] Subscribed to remote user ${user.uid} (${mediaType})`);
-            if (mediaType === 'video') {
-              const placeholder = document.getElementById('remotePlaceholder');
-              if (placeholder) placeholder.style.display = 'none';
-              const remoteContainer = document.getElementById('remoteAgoraVideo');
-              if (remoteContainer) {
-                remoteContainer.innerHTML = '';
-                user.videoTrack.play('remoteAgoraVideo');
-              }
-            }
-            if (mediaType === 'audio') {
-              user.audioTrack.play();
-            }
-          } catch (subErr) {
-            console.error('[Agora Subscribe Error]:', subErr);
-          }
-        });
-
-        client.on('user-unpublished', (user, mediaType) => {
-          console.log(`[Agora] Remote user ${user.uid} unpublished ${mediaType}`);
-          if (mediaType === 'video') {
-            const placeholder = document.getElementById('remotePlaceholder');
-            if (placeholder) placeholder.style.display = 'flex';
-          }
-        });
-
-        // Join Agora RTC channel
-        await client.join(effectiveAppId, channelName, token || null, uid);
-        console.log(`[Agora] Joined channel ${channelName} as UID ${uid}`);
-
-        // Check if remote users already published before we finished joining
-        if (client.remoteUsers && client.remoteUsers.length > 0) {
-          for (const rUser of client.remoteUsers) {
-            try {
-              if (rUser.hasVideo) {
-                await client.subscribe(rUser, 'video');
-                const placeholder = document.getElementById('remotePlaceholder');
-                if (placeholder) placeholder.style.display = 'none';
-                const remoteContainer = document.getElementById('remoteAgoraVideo');
-                if (remoteContainer) {
-                  remoteContainer.innerHTML = '';
-                  rUser.videoTrack.play('remoteAgoraVideo');
-                }
-              }
-              if (rUser.hasAudio) {
-                await client.subscribe(rUser, 'audio');
-                rUser.audioTrack.play();
-              }
-            } catch (e) {
-              console.warn('[Agora Existing Remote User Subscribe]:', e);
-            }
-          }
-        }
-
-        // Create tracks from the local stream
-        let videoTrack = null;
-        let audioTrack = null;
-
-        const vTrackRaw = (localStream && localStream.getVideoTracks) ? localStream.getVideoTracks()[0] : null;
-        const aTrackRaw = (localStream && localStream.getAudioTracks) ? localStream.getAudioTracks()[0] : null;
-
-        if (vTrackRaw && vTrackRaw.readyState === 'live') {
-          try {
-            videoTrack = AgoraRTC.createCustomVideoTrack({ mediaStreamTrack: vTrackRaw });
-            console.log('[Agora] Created custom video track from localStream');
-          } catch (vErr) {
-            console.warn('[Agora] Custom video track error, creating camera track:', vErr.message);
-            try { videoTrack = await AgoraRTC.createCameraVideoTrack(); } catch(e){}
-          }
-        } else {
-          try { videoTrack = await AgoraRTC.createCameraVideoTrack(); } catch(e){}
-        }
-
-        if (aTrackRaw && aTrackRaw.readyState === 'live') {
-          try {
-            audioTrack = AgoraRTC.createCustomAudioTrack({ mediaStreamTrack: aTrackRaw });
-            console.log('[Agora] Created custom audio track from localStream');
-          } catch (aErr) {
-            console.warn('[Agora] Custom audio track error, creating mic track:', aErr.message);
-            try { audioTrack = await AgoraRTC.createMicrophoneAudioTrack(); } catch(e){}
-          }
-        } else {
-          try { audioTrack = await AgoraRTC.createMicrophoneAudioTrack(); } catch(e){}
-        }
-
-        state.agora.localVideoTrack = videoTrack;
-        state.agora.localAudioTrack = audioTrack;
-
-        const tracksToPublish = [audioTrack, videoTrack].filter(Boolean);
-        if (tracksToPublish.length > 0) {
-          await client.publish(tracksToPublish);
-          console.log(`[Agora] Published ${tracksToPublish.length} local tracks!`);
-        }
-
-        console.log('[Agora] ✅ Full Agora RTC session established!');
-        return; // Agora success - no fallback needed
-
-      } catch (agoraErr) {
-        console.warn('[Agora] Failed to join - activating WebRTC P2P fallback:', agoraErr.message || agoraErr);
-        state.agora.client = null;
-      }
-
-      // Step 3: WebRTC P2P Fallback via Socket.IO & HTTP signaling
-      console.log('[WebRTC Fallback] Initiating peer-to-peer connection...');
-      await startWebRTCFallback(channelName, uid, localStream);
-    }
-
-    // WebRTC P2P fallback with dual Socket.IO & REST HTTP signaling
-    async function startWebRTCFallback(channelName, uid, localStream) {
-      try {
         const pc = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
           ]
         });
         state.webrtc.pc = pc;
         state.webrtc.sessionId = channelName;
 
-        // Add local tracks to peer connection
+        // Add local stream tracks to WebRTC
         if (localStream) {
-          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          localStream.getTracks().forEach(track => {
+            try { pc.addTrack(track, localStream); } catch(e){}
+          });
         }
 
-        // When remote stream arrives, show in main video box
+        // When remote track arrives via WebRTC, display it immediately
         pc.ontrack = (event) => {
-          console.log('[WebRTC] Remote track received!', event);
-          const remoteContainer = document.getElementById('remoteAgoraVideo');
-          const placeholder = document.getElementById('remotePlaceholder');
-          if (placeholder) placeholder.style.display = 'none';
-          if (!remoteContainer) return;
-
-          let streamToAttach = event.streams && event.streams[0];
-          if (!streamToAttach) {
-            streamToAttach = new MediaStream([event.track]);
+          console.log('[WebRTC] 📹 Remote track received:', event.track.kind);
+          let stream = event.streams && event.streams[0];
+          if (!stream) {
+            if (!state.webrtc.remoteStream) state.webrtc.remoteStream = new MediaStream();
+            state.webrtc.remoteStream.addTrack(event.track);
+            stream = state.webrtc.remoteStream;
           }
-
-          let remVid = remoteContainer.querySelector('video');
-          if (!remVid) {
-            remoteContainer.innerHTML = '';
-            remVid = document.createElement('video');
-            remVid.autoplay = true;
-            remVid.playsInline = true;
-            remVid.style.cssText = 'width:100%;height:100%;object-fit:cover;';
-            remoteContainer.appendChild(remVid);
-          }
-          remVid.srcObject = streamToAttach;
-          remVid.play().catch(e => console.warn('P2P video play warning:', e));
+          attachRemoteStream(stream);
         };
 
-        // ICE candidate exchange
         pc.onicecandidate = (event) => {
           if (event.candidate) {
             sendWebRTCSignal(channelName, 'candidate', event.candidate);
@@ -7412,13 +7326,47 @@
         pc.onconnectionstatechange = () => {
           console.log(`[WebRTC] Connection state: ${pc.connectionState}`);
           if (pc.connectionState === 'connected') {
-            console.log('[WebRTC] ✅ P2P connection established!');
+            if (_offerRetryInterval) clearInterval(_offerRetryInterval);
             const placeholder = document.getElementById('remotePlaceholder');
             if (placeholder) placeholder.style.display = 'none';
           }
         };
 
-        // Start polling for HTTP signals (reliable on Vercel)
+        // Notify peer via Socket.IO that we have joined the WebRTC room
+        if (typeof socket !== 'undefined' && socket && socket.connected) {
+          socket.emit('webrtc:join', { channelName, uid: localUid });
+        }
+
+        // Offerer creates the initial WebRTC offer
+        const isOfferer = (role === 'userA') || (String(localUid) > String(remoteUid || '0'));
+        if (isOfferer) {
+          const createAndSendOffer = async () => {
+            if (!pc || pc.connectionState === 'connected') return;
+            try {
+              if (pc.signalingState === 'stable') {
+                const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+                await pc.setLocalDescription(offer);
+                sendWebRTCSignal(channelName, 'offer', offer);
+                console.log('[WebRTC] Created & sent offer on', channelName);
+              }
+            } catch (err) {
+              console.warn('[WebRTC offer error]:', err);
+            }
+          };
+
+          setTimeout(createAndSendOffer, 250);
+
+          // Retry offer if peer was momentarily busy joining
+          _offerRetryInterval = setInterval(() => {
+            if (pc && pc.connectionState !== 'connected' && pc.connectionState !== 'connecting') {
+              createAndSendOffer();
+            } else if (pc && pc.connectionState === 'connected') {
+              clearInterval(_offerRetryInterval);
+            }
+          }, 2000);
+        }
+
+        // REST polling backup for WebRTC signals (resilient on slow networks)
         _lastSignalTimestamp = Date.now() - 5000;
         if (_webrtcSignalPollTimer) clearInterval(_webrtcSignalPollTimer);
         _webrtcSignalPollTimer = setInterval(async () => {
@@ -7433,59 +7381,108 @@
             const data = await res.json();
             if (data && data.signals && data.signals.length > 0) {
               for (const sig of data.signals) {
-                if (sig.timestamp > _lastSignalTimestamp) {
-                  _lastSignalTimestamp = sig.timestamp;
-                }
-                if (sig.type === 'offer' && pc.signalingState !== 'stable') {
-                  // already negotiating
-                } else if (sig.type === 'offer') {
+                if (sig.timestamp > _lastSignalTimestamp) _lastSignalTimestamp = sig.timestamp;
+                if (sig.type === 'offer' && pc.signalingState === 'stable') {
                   await pc.setRemoteDescription(new RTCSessionDescription(sig.payload));
-                  const answer = await pc.createAnswer();
-                  await pc.setLocalDescription(answer);
-                  await sendWebRTCSignal(channelName, 'answer', answer);
-                } else if (sig.type === 'answer' && !pc.currentRemoteDescription) {
+                  _remoteDescriptionSet = true;
+                  while (_pendingIceCandidates.length > 0) {
+                    const c = _pendingIceCandidates.shift();
+                    try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
+                  }
+                  const ans = await pc.createAnswer();
+                  await pc.setLocalDescription(ans);
+                  sendWebRTCSignal(channelName, 'answer', ans);
+                } else if (sig.type === 'answer' && pc.signalingState === 'have-local-offer') {
                   await pc.setRemoteDescription(new RTCSessionDescription(sig.payload));
+                  _remoteDescriptionSet = true;
+                  while (_pendingIceCandidates.length > 0) {
+                    const c = _pendingIceCandidates.shift();
+                    try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){}
+                  }
                 } else if (sig.type === 'candidate' && sig.payload) {
-                  try { await pc.addIceCandidate(new RTCIceCandidate(sig.payload)); } catch(e){}
+                  if (!_remoteDescriptionSet || !pc.remoteDescription) {
+                    _pendingIceCandidates.push(sig.payload);
+                  } else {
+                    try { await pc.addIceCandidate(new RTCIceCandidate(sig.payload)); } catch(e){}
+                  }
                 }
               }
             }
           } catch(e) {}
-        }, 1200);
+        }, 1500);
 
-        // One peer creates the initial offer deterministically
-        const isOfferer = (state.match && state.match.role === 'userA') || (String(uid) > String(state.match?.remoteUid || '0'));
-        if (isOfferer) {
-          setTimeout(async () => {
+      } catch (webrtcErr) {
+        console.warn('[WebRTC Setup Warning]:', webrtcErr);
+      }
+
+      // Step 3: Concurrently connect to Agora RTC if available
+      try {
+        if (typeof AgoraRTC !== 'undefined' && AgoraRTC) {
+          if (state.agora.client) {
+            try { await state.agora.client.leave(); } catch(e){}
+            state.agora.client = null;
+          }
+          const effectiveAppId = appId || state.agora.appId || '92bfa202f8a94e23add6ed84e72e6317';
+          const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+          state.agora.client = client;
+
+          client.on('user-published', async (user, mediaType) => {
             try {
-              if (pc.signalingState === 'stable') {
-                const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-                await pc.setLocalDescription(offer);
-                await sendWebRTCSignal(channelName, 'offer', offer);
-                console.log('[WebRTC] Initiated offer for channel', channelName);
+              await client.subscribe(user, mediaType);
+              console.log(`[Agora] Subscribed to remote user ${user.uid} (${mediaType})`);
+              if (mediaType === 'video') {
+                const placeholder = document.getElementById('remotePlaceholder');
+                if (placeholder) placeholder.style.display = 'none';
+                const remoteContainer = document.getElementById('remoteAgoraVideo');
+                if (remoteContainer) {
+                  remoteContainer.innerHTML = '';
+                  user.videoTrack.play('remoteAgoraVideo');
+                }
               }
-            } catch (offerErr) {
-              console.warn('[WebRTC createOffer error]:', offerErr);
+              if (mediaType === 'audio') {
+                user.audioTrack.play();
+              }
+            } catch(subErr) {
+              console.warn('[Agora Subscribe Error]:', subErr);
             }
-          }, 600);
-        }
+          });
 
-        // If WebSockets are connected, also emit webrtc:join
-        if (typeof socket !== 'undefined' && socket && socket.connected) {
-          socket.emit('webrtc:join', { channelName, uid });
-        }
+          await client.join(effectiveAppId, channelName, agoraToken || null, localUid);
+          console.log(`[Agora] Joined channel ${channelName} as UID ${localUid}`);
 
-      } catch (err) {
-        console.error('[WebRTC Fallback Error]:', err);
+          let vTrack = null;
+          let aTrack = null;
+          const vTrackRaw = (localStream && localStream.getVideoTracks) ? localStream.getVideoTracks()[0] : null;
+          const aTrackRaw = (localStream && localStream.getAudioTracks) ? localStream.getAudioTracks()[0] : null;
+
+          if (vTrackRaw && vTrackRaw.readyState === 'live') {
+            try { vTrack = AgoraRTC.createCustomVideoTrack({ mediaStreamTrack: vTrackRaw }); } catch(e){}
+          }
+          if (aTrackRaw && aTrackRaw.readyState === 'live') {
+            try { aTrack = AgoraRTC.createCustomAudioTrack({ mediaStreamTrack: aTrackRaw }); } catch(e){}
+          }
+          const tracks = [aTrack, vTrack].filter(Boolean);
+          if (tracks.length > 0) {
+            await client.publish(tracks);
+          }
+        }
+      } catch (agoraErr) {
+        console.warn('[Agora RTC notice]:', agoraErr.message || agoraErr);
       }
     }
 
     async function leaveAgora() {
       try {
+        if (_offerRetryInterval) {
+          clearInterval(_offerRetryInterval);
+          _offerRetryInterval = null;
+        }
         if (_webrtcSignalPollTimer) {
           clearInterval(_webrtcSignalPollTimer);
           _webrtcSignalPollTimer = null;
         }
+        _pendingIceCandidates = [];
+        _remoteDescriptionSet = false;
 
         // Stop WebRTC if active
         if (state.webrtc.pc) {
