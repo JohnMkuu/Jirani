@@ -1585,7 +1585,7 @@ function getOrCreateUser(userId, initialData = {}) {
   if (!user) {
     const gender = initialData.gender || 'male'; // Default male seeker unless specified
     const isFemale = gender === 'female';
-    const displayName = initialData.displayName || initialData.username || 'Jirani Member';
+    const displayName = initialData.displayName || initialData.username || '';
 
     user = {
       id: userId,

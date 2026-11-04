@@ -4062,7 +4062,7 @@
           <!-- 1. Peer info chip with Heart -->
           <div class="peer-info-chip" style="display:flex; align-items:center; gap:0.5rem; background:rgba(0,0,0,0.6); backdrop-filter:blur(10px); padding:0.35rem 0.85rem 0.35rem 0.35rem; border-radius:999px; border:1px solid rgba(255,255,255,0.15);">
             <img id="callPeerAvatar" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" alt="Peer" class="peer-avatar-sm" style="width:30px; height:30px; border-radius:50%; object-fit:cover;">
-            <div style="font-weight:700; font-size:0.9rem; color:#fff;" id="callPeerName">Eniola 💃</div>
+            <div style="font-weight:700; font-size:0.9rem; color:#fff;" id="callPeerName"></div>
             <button onclick="toggleFavoritePeer()" style="background:transparent; border:none; color:#f43f5e; font-size:1.05rem; cursor:pointer; padding:0 0 0 0.2rem;" title="Favorite">♡</button>
           </div>
           <!-- 2. Rate & Billing Pill -->
@@ -5344,7 +5344,7 @@
         const body = {
           provider,
           email: effectiveEmail,
-          displayName: effectiveName || 'Kariuki',
+          displayName: effectiveName || '',
           gender: gender || 'male',
           avatar,
           isVerifiedFemale: !!isVerifiedFemale,
@@ -6443,12 +6443,12 @@
         if (savedCustom) {
           state.user.displayName = savedCustom;
         } else {
-          state.user.displayName = 'Kariuki';
+          state.user.displayName = '';
         }
       }
 
       const drawerName = document.getElementById('drawerDisplayName');
-      if (drawerName) drawerName.textContent = state.user.displayName || 'Kariuki';
+      if (drawerName) drawerName.textContent = state.user.displayName || '';
 
       const drawerUid = document.getElementById('drawerUid');
       if (drawerUid && state.user.id) {
@@ -7043,10 +7043,10 @@
       };
 
       setStage('call');
-      document.getElementById('callPeerName').textContent = data.remoteUser?.displayName || 'Real Partner';
+      document.getElementById('callPeerName').textContent = data.remoteUser?.displayName || '';
       const peerAvatar = (data.remoteUser?.avatar && !data.remoteUser.avatar.includes('bottts') && !data.remoteUser.avatar.includes('dicebear'))
         ? data.remoteUser.avatar
-        : generateInitialAvatar(data.remoteUser?.displayName || 'Peer');
+        : generateInitialAvatar(data.remoteUser?.displayName || '');
       document.getElementById('callPeerAvatar').src = peerAvatar;
       const remotePlaceholderAvatar = document.getElementById('remotePlaceholderAvatar');
       if (remotePlaceholderAvatar) remotePlaceholderAvatar.src = peerAvatar;
@@ -8507,7 +8507,7 @@
         remoteAgora.style.display = 'block';
         pipBox.appendChild(remoteAgora);
         const pipLabel = pipBox.querySelector('.pip-label');
-        if (pipLabel) pipLabel.textContent = state.match?.remoteUser?.displayName || 'Partner';
+        if (pipLabel) pipLabel.textContent = state.match?.remoteUser?.displayName || '';
       } else {
         // Normal: remote partner large in main video, local webcam small in PiP
         localAgora.style.display = 'none';
