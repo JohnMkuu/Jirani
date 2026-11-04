@@ -7038,6 +7038,7 @@
         remoteUser: data.remoteUser,
         localUid: data.localUid,
         remoteUid: data.remoteUid,
+        role: data.role,
         startTime: Date.now()
       };
 
@@ -7124,7 +7125,7 @@
         vid = document.createElement('video');
         vid.autoplay = true;
         vid.playsInline = true;
-        vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;';
+        vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;z-index:10;';
         remoteContainer.appendChild(vid);
       }
       if (vid.srcObject !== stream) {
@@ -7244,7 +7245,7 @@
       } catch (err) {}
     });
 
-    // Helper: Acquire local physical camera (falls back to active canvas stream if hardware camera is locked)
+    // Helper: Acquire local physical camera (falls back to video-only, then virtual canvas)
     async function getLocalMediaStream() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -7254,9 +7255,19 @@
         console.log('[Camera] Physical camera & mic acquired!');
         return { stream, isReal: true };
       } catch (err) {
-        console.warn('[Camera] Real camera blocked/unavailable, using virtual camera:', err.message);
-        const vStream = getOrCreateVirtualCamera(state.user.displayName, state.user.avatar);
-        return { stream: vStream, isReal: false };
+        console.warn('[Camera] Camera+mic failed, trying video-only:', err.message);
+        try {
+          const videoOnly = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+            audio: false
+          });
+          console.log('[Camera] Video-only stream acquired!');
+          return { stream: videoOnly, isReal: true };
+        } catch (vErr) {
+          console.warn('[Camera] Real camera blocked, using virtual canvas:', vErr.message);
+          const vStream = getOrCreateVirtualCamera(state.user.displayName, state.user.avatar);
+          return { stream: vStream, isReal: false };
+        }
       }
     }
 
@@ -7286,24 +7297,23 @@
           }
           if (!state.peerjs) state.peerjs = {};
 
-          const cleanChan = String(channelName).replace(/[^a-zA-Z0-9]/g, '');
-          const isOfferer = (role === 'userA') || (String(localUid) > String(remoteUid || '0'));
-          const myPeerId = `jirani_${cleanChan}_${isOfferer ? 'a' : 'b'}`;
-          const remotePeerId = `jirani_${cleanChan}_${isOfferer ? 'b' : 'a'}`;
+          const cleanChan = String(channelName).replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+          const isOfferer = role ? (role === 'userA') : (String(localUid) > String(remoteUid || '0'));
+          const peerSuffix = isOfferer ? 'a' : 'b';
+          const myPeerId = `j_${cleanChan}_${peerSuffix}`;
+          const remotePeerId = `j_${cleanChan}_${isOfferer ? 'b' : 'a'}`;
 
           console.log(`[PeerJS] Initialising peer as ${myPeerId}, target: ${remotePeerId}`);
 
-          const peer = new Peer(myPeerId, {
-            debug: 1,
-            config: {
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:global.stun.twilio.com:3478' }
-              ]
-            }
-          });
+          const iceServers = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:global.stun.twilio.com:3478' },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+          ];
+          let peer = new Peer(myPeerId, { debug: 1, config: { iceServers } });
           state.peerjs.peer = peer;
 
           // Answer incoming call from peer
@@ -7318,41 +7328,103 @@
           });
 
           peer.on('open', (id) => {
-            console.log('[PeerJS] Connected to global signaling with ID:', id);
+            console.log('[PeerJS] My peer ID:', id, '| target:', remotePeerId, '| offerer:', isOfferer);
+            // Both sides broadcast their peer ID via REST for discovery
+            sendWebRTCSignal(channelName, 'peerid', { peerId: id, suffix: peerSuffix });
+
+            const tryCall = (targetId) => {
+              if (!peer || peer.destroyed) return;
+              const placeholder = document.getElementById('remotePlaceholder');
+              if (placeholder && placeholder.style.display === 'none') return;
+              const tid = targetId || remotePeerId;
+              console.log('[PeerJS] Calling:', tid);
+              const outgoingCall = peer.call(tid, localStream || undefined);
+              if (outgoingCall) {
+                outgoingCall.on('stream', (remoteStream) => {
+                  console.log('[PeerJS] 📹 Got remote stream!');
+                  attachRemoteStream(remoteStream);
+                });
+                outgoingCall.on('error', (e) => console.warn('[PeerJS call error]:', e));
+                state.peerjs.call = outgoingCall;
+              }
+            };
+
             if (isOfferer) {
-              const tryCall = () => {
-                if (!peer || peer.destroyed) return;
-                const placeholder = document.getElementById('remotePlaceholder');
-                if (placeholder && placeholder.style.display === 'none') return;
-
-                console.log('[PeerJS] Calling remote peer:', remotePeerId);
-                const outgoingCall = peer.call(remotePeerId, localStream || undefined);
-                if (outgoingCall) {
-                  outgoingCall.on('stream', (remoteStream) => {
-                    console.log('[PeerJS] 📹 Remote partner camera stream received!');
-                    attachRemoteStream(remoteStream);
-                  });
-                  outgoingCall.on('error', (err) => console.warn('[PeerJS call notice]:', err));
-                  state.peerjs.call = outgoingCall;
-                }
-              };
-
-              setTimeout(tryCall, 700);
-              let peerRetries = 0;
-              const peerRetryTimer = setInterval(() => {
-                peerRetries++;
-                const placeholder = document.getElementById('remotePlaceholder');
-                if (peerRetries > 8 || (placeholder && placeholder.style.display === 'none')) {
-                  clearInterval(peerRetryTimer);
-                  return;
-                }
+              // Offerer calls immediately and retries, also polls for answerer's actual peer ID
+              setTimeout(() => tryCall(), 700);
+              let retries = 0;
+              const retryTimer = setInterval(async () => {
+                retries++;
+                const ph = document.getElementById('remotePlaceholder');
+                if (retries > 10 || (ph && ph.style.display === 'none')) { clearInterval(retryTimer); return; }
+                // Check if answerer broadcast a custom peer ID
+                try {
+                  const myId = state.user.id || 'anon';
+                  const r = await fetch('/api/webrtc/signals/' + encodeURIComponent(channelName) + '/' + encodeURIComponent(myId) + '?since=' + (Date.now() - 30000));
+                  const d = await r.json();
+                  if (d && d.signals) {
+                    for (const s of d.signals) {
+                      if (s.type === 'peerid' && s.payload && s.payload.suffix !== peerSuffix) {
+                        clearInterval(retryTimer);
+                        tryCall(s.payload.peerId);
+                        return;
+                      }
+                    }
+                  }
+                } catch(e) {}
                 tryCall();
+              }, 1800);
+            } else {
+              // Answerer: wait for incoming call, but also try reverse-call after 3s
+              let answererRetries = 0;
+              const answererTimer = setInterval(async () => {
+                answererRetries++;
+                const ph = document.getElementById('remotePlaceholder');
+                if (answererRetries > 12 || (ph && ph.style.display === 'none')) { clearInterval(answererTimer); return; }
+                // Check if offerer broadcast a custom peer ID
+                try {
+                  const myId = state.user.id || 'anon';
+                  const r = await fetch('/api/webrtc/signals/' + encodeURIComponent(channelName) + '/' + encodeURIComponent(myId) + '?since=' + (Date.now() - 30000));
+                  const d = await r.json();
+                  if (d && d.signals) {
+                    for (const s of d.signals) {
+                      if (s.type === 'peerid' && s.payload && s.payload.suffix !== peerSuffix) {
+                        clearInterval(answererTimer);
+                        tryCall(s.payload.peerId);
+                        return;
+                      }
+                    }
+                  }
+                } catch(e) {}
+                if (answererRetries === 2) tryCall(); // reverse-call after ~3.6s
               }, 1800);
             }
           });
 
           peer.on('error', (err) => {
             console.warn('[PeerJS notice]:', err.type || err.message);
+            if ((err.type === 'unavailable-id' || err.type === 'server-error') && !peer._retried) {
+              peer._retried = true;
+              const ts = Date.now().toString(36);
+              const freshId = `j_${cleanChan}_${peerSuffix}_${ts}`;
+              console.log('[PeerJS] Retrying with fresh ID:', freshId);
+              try { peer.destroy(); } catch(e) {}
+              peer = new Peer(freshId, { debug: 1, config: { iceServers } });
+              state.peerjs.peer = peer;
+              peer.on('call', (inc) => {
+                inc.answer(localStream || undefined);
+                inc.on('stream', (rs) => { attachRemoteStream(rs); });
+                state.peerjs.call = inc;
+              });
+              peer.on('open', (newId) => {
+                sendWebRTCSignal(channelName, 'peerid', { peerId: newId, suffix: peerSuffix });
+                setTimeout(() => {
+                  const oc = peer.call(remotePeerId, localStream || undefined);
+                  if (oc) { oc.on('stream', (rs) => attachRemoteStream(rs)); state.peerjs.call = oc; }
+                }, 800);
+              });
+              peer.on('error', (e2) => console.warn('[PeerJS retry error]:', e2.type));
+            }
           });
         }
       } catch (pErr) {
@@ -7422,7 +7494,7 @@
         }
 
         // Offerer creates the initial WebRTC offer
-        const isOfferer = (role === 'userA') || (String(localUid) > String(remoteUid || '0'));
+        const isOfferer = role ? (role === 'userA') : (String(localUid) > String(remoteUid || '0'));
         if (isOfferer) {
           const createAndSendOffer = async () => {
             if (!pc || pc.connectionState === 'connected') return;
