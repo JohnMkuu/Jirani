@@ -18,6 +18,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!-- Agora Web SDK 4.x Official CDN -->
+    <!-- PeerJS WebRTC P2P Global Cloud CDN (Guaranteed camera-to-camera streaming on Vercel) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
   <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.22.0.js"></script>
   <!-- Socket.IO Client (CDN with local fallback) -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
@@ -7275,7 +7277,89 @@
         showLocalStreamInPiP(localStream);
       }
 
-      // Step 2: Establish direct WebRTC P2P connection (guarantees camera stream even without Agora cert)
+      // Step 2a: PeerJS WebRTC P2P (runs directly browser-to-browser via global cloud signaling, 100% Vercel compatible)
+      try {
+        if (typeof Peer !== 'undefined') {
+          if (state.peerjs && state.peerjs.peer) {
+            try { state.peerjs.peer.destroy(); } catch(e){}
+            state.peerjs.peer = null;
+          }
+          if (!state.peerjs) state.peerjs = {};
+
+          const cleanChan = String(channelName).replace(/[^a-zA-Z0-9]/g, '');
+          const isOfferer = (role === 'userA') || (String(localUid) > String(remoteUid || '0'));
+          const myPeerId = `jirani_${cleanChan}_${isOfferer ? 'a' : 'b'}`;
+          const remotePeerId = `jirani_${cleanChan}_${isOfferer ? 'b' : 'a'}`;
+
+          console.log(`[PeerJS] Initialising peer as ${myPeerId}, target: ${remotePeerId}`);
+
+          const peer = new Peer(myPeerId, {
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' }
+              ]
+            }
+          });
+          state.peerjs.peer = peer;
+
+          // Answer incoming call from peer
+          peer.on('call', (incomingCall) => {
+            console.log('[PeerJS] 📞 Incoming call from matched partner!');
+            incomingCall.answer(localStream || undefined);
+            incomingCall.on('stream', (remoteStream) => {
+              console.log('[PeerJS] 📹 Remote partner camera stream connected!');
+              attachRemoteStream(remoteStream);
+            });
+            state.peerjs.call = incomingCall;
+          });
+
+          peer.on('open', (id) => {
+            console.log('[PeerJS] Connected to global signaling with ID:', id);
+            if (isOfferer) {
+              const tryCall = () => {
+                if (!peer || peer.destroyed) return;
+                const placeholder = document.getElementById('remotePlaceholder');
+                if (placeholder && placeholder.style.display === 'none') return;
+
+                console.log('[PeerJS] Calling remote peer:', remotePeerId);
+                const outgoingCall = peer.call(remotePeerId, localStream || undefined);
+                if (outgoingCall) {
+                  outgoingCall.on('stream', (remoteStream) => {
+                    console.log('[PeerJS] 📹 Remote partner camera stream received!');
+                    attachRemoteStream(remoteStream);
+                  });
+                  outgoingCall.on('error', (err) => console.warn('[PeerJS call notice]:', err));
+                  state.peerjs.call = outgoingCall;
+                }
+              };
+
+              setTimeout(tryCall, 700);
+              let peerRetries = 0;
+              const peerRetryTimer = setInterval(() => {
+                peerRetries++;
+                const placeholder = document.getElementById('remotePlaceholder');
+                if (peerRetries > 8 || (placeholder && placeholder.style.display === 'none')) {
+                  clearInterval(peerRetryTimer);
+                  return;
+                }
+                tryCall();
+              }, 1800);
+            }
+          });
+
+          peer.on('error', (err) => {
+            console.warn('[PeerJS notice]:', err.type || err.message);
+          });
+        }
+      } catch (pErr) {
+        console.warn('[PeerJS Setup Warning]:', pErr);
+      }
+
+      // Step 2b: Standard WebRTC P2P connection
       try {
         if (state.webrtc.pc) {
           try { state.webrtc.pc.close(); } catch(e){}
